@@ -32,10 +32,6 @@ export function OrderComposer({ targetOrder = null, onComplete, onCancel }: Orde
     consignments,
     addOrder,
     addItems,
-    consumeItems,
-    restoreItems,
-    consumeConsignmentItems,
-    restoreConsignmentItems,
   } = useWarung();
   const [tables, setTables] = useState<number[]>(targetOrder?.tables ?? []);
   const [pax, setPax] = useState(String(targetOrder?.pax ?? 2));
@@ -65,12 +61,20 @@ export function OrderComposer({ targetOrder = null, onComplete, onCancel }: Orde
   );
 
   const getMenuAvailability = (menu: MenuKey) => {
-    if (isConsignmentKey(menu)) return consignments.find((item) => item.id === consignmentIdFromKey(menu))?.qty ?? 0;
+    const otherCartItems = cart.filter((item) => item.menu !== menu);
+    if (isConsignmentKey(menu)) {
+      const reserved = otherCartItems.filter((item) => item.menu === menu).reduce((sum, item) => sum + item.qty, 0);
+      return Math.max(0, (consignments.find((item) => item.id === consignmentIdFromKey(menu))?.qty ?? 0) - reserved);
+    }
     const recipe = menus.find((item) => item.id === menu)?.recipe ?? {};
     const ingredients = Object.entries(recipe);
     if (!ingredients.length) return Number.POSITIVE_INFINITY;
     return Math.min(...ingredients.map(([id, required]) => {
-      const available = inventory.find((item) => item.id === id)?.qty ?? 0;
+      const reserved = otherCartItems.reduce((sum, cartItem) => {
+        const cartRecipe = menus.find((item) => item.id === cartItem.menu)?.recipe ?? {};
+        return sum + (cartRecipe[id] || 0) * cartItem.qty;
+      }, 0);
+      const available = Math.max(0, (inventory.find((item) => item.id === id)?.qty ?? 0) - reserved);
       return required > 0 ? Math.floor(available / required) : Number.POSITIVE_INFINITY;
     }));
   };
@@ -87,14 +91,7 @@ export function OrderComposer({ targetOrder = null, onComplete, onCancel }: Orde
   const changeQty = (key: MenuKey, delta: number) => {
     haptic();
     const found = cart.find((item) => item.menu === key);
-    if (delta > 0) {
-      if (isConsignmentKey(key)) consumeConsignmentItems([{ menu: key, qty: 1 }]);
-      else consumeItems([{ menu: key, qty: 1 }]);
-    }
-    if (delta < 0 && found) {
-      if (isConsignmentKey(key)) restoreConsignmentItems([{ menu: key, qty: 1 }]);
-      else restoreItems([{ menu: key, qty: 1 }]);
-    }
+    if (delta > 0 && (found?.qty ?? 0) >= getMenuAvailability(key)) return;
     setCart((current) => {
       if (!found && delta > 0) return [...current, { menu: key, qty: 1 }];
       return current
@@ -103,15 +100,7 @@ export function OrderComposer({ targetOrder = null, onComplete, onCancel }: Orde
     });
   };
 
-  const restoreCartStock = () => {
-    const menuItems = cart.filter((item) => !isConsignmentKey(item.menu));
-    const consignmentItems = cart.filter((item) => isConsignmentKey(item.menu));
-    if (menuItems.length) restoreItems(menuItems);
-    if (consignmentItems.length) restoreConsignmentItems(consignmentItems);
-  };
-
   const resetComposer = () => {
-    restoreCartStock();
     setCart([]);
     setNote('');
     if (!isAdding) setTables([]);
@@ -238,7 +227,7 @@ export function OrderComposer({ targetOrder = null, onComplete, onCancel }: Orde
           {visibleMenus.map((item) => {
             const qty = cart.find((entry) => entry.menu === item.id)?.qty ?? 0;
             const available = getMenuAvailability(item.id);
-            const unavailable = available <= 0;
+            const unavailable = available <= qty;
             return (
               <View key={item.id} style={[s.menuCard, { borderColor: qty ? c.primary : c.border, backgroundColor: qty ? c.secondary : c.card }]}>
                 <View style={s.menuCardTop}>
@@ -249,7 +238,7 @@ export function OrderComposer({ targetOrder = null, onComplete, onCancel }: Orde
                     <Text numberOfLines={1} style={[s.menuCardName, { color: c.foreground }]}>{item.name}</Text>
                     <Text style={[s.menuCardPrice, { color: c.primary }]}>{formatRp(item.price)}</Text>
                     <Text style={[s.stockText, { color: unavailable ? c.destructive : c.mutedForeground }]}>
-                      {unavailable ? 'Habis' : item.isConsignment ? `${available} biji` : Number.isFinite(available) ? `${available} porsi` : 'Tersedia'}
+                      {unavailable ? 'Habis' : item.isConsignment ? `${available - qty} biji` : Number.isFinite(available) ? `${available - qty} porsi` : 'Tersedia'}
                     </Text>
                   </View>
                 </View>

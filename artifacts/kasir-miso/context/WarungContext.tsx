@@ -5,7 +5,17 @@ import { persistImageUri } from '@/utils/persistentImage';
 export type MenuKey = string;
 export type PaymentMethod = 'Tunai' | 'QRIS';
 export interface MenuItem { id: string; name: string; price: number; recipe: Record<string, number>; category?: string; imageUri?: string }
-export interface OrderItem { menu: MenuKey; qty: number; note?: string }
+export interface OrderItem {
+  menu: MenuKey;
+  qty: number;
+  note?: string;
+  /** Immutable catalog values captured when the item is submitted. */
+  displayName?: string;
+  unitPrice?: number;
+  recipe?: Record<string, number>;
+  /** Per-piece amount owed to a consignor. */
+  consignmentUnitCost?: number;
+}
 export interface ActiveOrder {
   id: string;
   tables: number[];
@@ -215,40 +225,53 @@ export function WarungProvider({ children }: { children: ReactNode }) {
          return restored ? { ...item, qty: item.qty + restored } : item;
        }),
      })),
-    addOrder: (tables, pax, items, note) => {
-      const order = { id: makeId(), tables, pax, items, note, cooked: false, createdAt: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
-      setState(s => ({ ...s, activeOrders: [...s.activeOrders, order], kitchenOrders: [...s.kitchenOrders, order] }));
-    },
+     addOrder: (tables, pax, items, note) => setState(s => {
+       const submittedItems = snapshotOrderItems(items, s.menus, s.consignments);
+       if (!hasStockForOrder(s.inventory, s.consignments, submittedItems)) return s;
+       const order = { id: makeId(), tables, pax, items: submittedItems, note, cooked: false, createdAt: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
+       return {
+         ...s,
+         activeOrders: [...s.activeOrders, order],
+         kitchenOrders: [...s.kitchenOrders, order],
+         inventory: consume(s.inventory, s.menus, submittedItems),
+         consignments: consumeConsignmentStock(s.consignments, submittedItems),
+       };
+     }),
      updateOrderTables: (id, tables) => setState(s => {
        const update = (order: ActiveOrder) => order.id === id || order.parentOrderId === id ? { ...order, tables } : order;
        return { ...s, activeOrders: s.activeOrders.map(update), kitchenOrders: s.kitchenOrders.map(update) };
      }),
-    addItems: (id, items, note) => setState(s => {
+     addItems: (id, items, note) => setState(s => {
       const order = s.activeOrders.find(o => o.id === id);
       if (!order) return s;
+       const submittedItems = snapshotOrderItems(items, s.menus, s.consignments);
+       if (!hasStockForOrder(s.inventory, s.consignments, submittedItems)) return s;
        if (!order.cooked && !order.pendingItems?.length) {
-         const updated = { ...order, items: mergeOrderItems(order.items, items), note: note || order.note, cooked: false };
-         return { ...s, activeOrders: s.activeOrders.map(o => o.id === id ? updated : o), kitchenOrders: [...s.kitchenOrders.filter(o => o.id !== id), updated] };
+          const updated = { ...order, items: mergeOrderItems(order.items, submittedItems), note: note || order.note, cooked: false };
+          return {
+            ...s, activeOrders: s.activeOrders.map(o => o.id === id ? updated : o), kitchenOrders: [...s.kitchenOrders.filter(o => o.id !== id), updated],
+            inventory: consume(s.inventory, s.menus, submittedItems), consignments: consumeConsignmentStock(s.consignments, submittedItems),
+          };
        }
 
        const existingAdditional = s.kitchenOrders.find((kitchenOrder) => kitchenOrder.isAdditional && kitchenOrder.parentOrderId === id);
        const updated = {
          ...order,
-         pendingItems: mergeOrderItems(order.pendingItems || [], items),
+          pendingItems: mergeOrderItems(order.pendingItems || [], submittedItems),
          note: note || order.note,
          cooked: false,
        };
        const additionalTicket: ActiveOrder = existingAdditional
          ? {
            ...existingAdditional,
-           items: mergeOrderItems(existingAdditional.items, items),
+            items: mergeOrderItems(existingAdditional.items, submittedItems),
            tables: order.tables,
            note: note || existingAdditional.note,
          }
          : {
            ...order,
            id: makeId(),
-           items,
+            items: submittedItems,
            pendingItems: undefined,
            isAdditional: true,
            parentOrderId: id,
@@ -261,6 +284,8 @@ export function WarungProvider({ children }: { children: ReactNode }) {
          kitchenOrders: existingAdditional
            ? s.kitchenOrders.map(o => o.id === existingAdditional.id ? additionalTicket : o)
            : [...s.kitchenOrders, additionalTicket],
+          inventory: consume(s.inventory, s.menus, submittedItems),
+          consignments: consumeConsignmentStock(s.consignments, submittedItems),
        };
     }),
      completeKitchen: id => setState(s => {
@@ -348,7 +373,7 @@ export function WarungProvider({ children }: { children: ReactNode }) {
             },
           ],
           savingsRules: s.savingsRules.map((rule) => {
-             const savedQty = getOrderItems(order).reduce((total, item) => total + (s.menus.find((menu) => menu.id === item.menu)?.recipe[rule.inventoryId] || 0) * item.qty, 0);
+              const savedQty = getOrderItems(order).reduce((total, item) => total + (item.recipe?.[rule.inventoryId] ?? s.menus.find((menu) => menu.id === item.menu)?.recipe[rule.inventoryId] ?? 0) * item.qty, 0);
             return savedQty
               ? { ...rule, savedQty: (rule.savedQty || 0) + savedQty, savedAmount: rule.savedAmount + savedQty * rule.amountPerItem }
               : rule;
@@ -356,20 +381,21 @@ export function WarungProvider({ children }: { children: ReactNode }) {
           savingsEntries: [
             ...s.savingsEntries,
             ...s.savingsRules.flatMap((rule) => {
-               const qty = getOrderItems(order).reduce((total, item) => total + (s.menus.find((menu) => menu.id === item.menu)?.recipe[rule.inventoryId] || 0) * item.qty, 0);
+               const qty = getOrderItems(order).reduce((total, item) => total + (item.recipe?.[rule.inventoryId] ?? s.menus.find((menu) => menu.id === item.menu)?.recipe[rule.inventoryId] ?? 0) * item.qty, 0);
               return qty ? [{ id: makeId(), name: rule.name, inventoryId: rule.inventoryId, qty, amount: qty * rule.amountPerItem, date: localDate() }] : [];
             }),
               ...getOrderItems(order).flatMap((item) => {
                if (!isConsignmentKey(item.menu)) return [];
-               const consignment = s.consignments.find((entry) => entry.id === consignmentIdFromKey(item.menu));
-               if (!consignment || consignment.packSize <= 0) return [];
+                const consignment = s.consignments.find((entry) => entry.id === consignmentIdFromKey(item.menu));
+                const unitCost = item.consignmentUnitCost ?? (consignment && consignment.packSize > 0 ? consignment.cost / consignment.packSize : undefined);
+                if (unitCost === undefined) return [];
                return [{
                  id: makeId(),
-                 name: `Bayar penitip · ${consignment.name}`,
+                  name: `Bayar penitip · ${item.displayName ?? consignment?.name ?? 'Titipan'}`,
                  inventoryId: '',
-                 consignmentId: consignment.id,
+                  consignmentId: consignment?.id,
                  qty: item.qty,
-                 amount: item.qty * (consignment.cost / consignment.packSize),
+                  amount: item.qty * unitCost,
                  date: localDate(),
                }];
              }),
@@ -442,12 +468,12 @@ export function WarungProvider({ children }: { children: ReactNode }) {
 }
 function consume(items: InventoryItem[], menus: MenuItem[], orders: OrderItem[]) {
   const used: Record<string, number> = {};
-  orders.forEach(o => Object.entries(menus.find(item => item.id === o.menu)?.recipe || {}).forEach(([id, qty]) => { used[id] = (used[id] || 0) + qty * o.qty; }));
+  orders.forEach(o => Object.entries(o.recipe ?? menus.find(item => item.id === o.menu)?.recipe ?? {}).forEach(([id, qty]) => { used[id] = (used[id] || 0) + qty * o.qty; }));
   return items.map(item => ({ ...item, qty: Math.max(0, item.qty - (used[item.id] || 0)) }));
 }
 function restore(items: InventoryItem[], menus: MenuItem[], orders: OrderItem[]) {
   const used: Record<string, number> = {};
-  orders.forEach(o => Object.entries(menus.find(item => item.id === o.menu)?.recipe || {}).forEach(([id, qty]) => { used[id] = (used[id] || 0) + qty * o.qty; }));
+  orders.forEach(o => Object.entries(o.recipe ?? menus.find(item => item.id === o.menu)?.recipe ?? {}).forEach(([id, qty]) => { used[id] = (used[id] || 0) + qty * o.qty; }));
   return items.map(item => ({ ...item, qty: item.qty + (used[item.id] || 0) }));
 }
 export function useWarung() { const context = useContext(WarungContext); if (!context) throw new Error('useWarung harus dipakai di dalam WarungProvider'); return context; }
@@ -472,12 +498,16 @@ export function orderTotal(order: ActiveOrder, menus: MenuItem[], consignments: 
     const consignmentPrice = isConsignmentKey(item.menu)
       ? consignments.find(consignment => consignment.id === consignmentIdFromKey(item.menu))?.sellPrice
       : undefined;
-    return sum + (menuPrice ?? consignmentPrice ?? 0) * item.qty;
+    return sum + (item.unitPrice ?? menuPrice ?? consignmentPrice ?? 0) * item.qty;
   }, 0);
 }
 function mergeOrderItems(...groups: OrderItem[][]) {
   return groups.flat().reduce<OrderItem[]>((items, item) => {
-    const existingIndex = items.findIndex((entry) => entry.menu === item.menu);
+    const existingIndex = items.findIndex((entry) => entry.menu === item.menu
+      && entry.displayName === item.displayName
+      && entry.unitPrice === item.unitPrice
+      && entry.consignmentUnitCost === item.consignmentUnitCost
+      && JSON.stringify(entry.recipe ?? null) === JSON.stringify(item.recipe ?? null));
     if (existingIndex >= 0) {
       items[existingIndex] = { ...items[existingIndex], qty: items[existingIndex].qty + item.qty };
     } else {
@@ -485,5 +515,43 @@ function mergeOrderItems(...groups: OrderItem[][]) {
     }
     return items;
   }, []);
+}
+function snapshotOrderItems(items: OrderItem[], menus: MenuItem[], consignments: ConsignmentItem[]) {
+  return items.map((item) => {
+    if (isConsignmentKey(item.menu)) {
+      const consignment = consignments.find((entry) => entry.id === consignmentIdFromKey(item.menu));
+      return {
+        ...item,
+        displayName: item.displayName ?? consignment?.name,
+        unitPrice: item.unitPrice ?? consignment?.sellPrice,
+        consignmentUnitCost: item.consignmentUnitCost ?? (consignment && consignment.packSize > 0 ? consignment.cost / consignment.packSize : undefined),
+      };
+    }
+    const menu = menus.find((entry) => entry.id === item.menu);
+    return { ...item, displayName: item.displayName ?? menu?.name, unitPrice: item.unitPrice ?? menu?.price, recipe: item.recipe ?? menu?.recipe };
+  });
+}
+function hasStockForOrder(inventory: InventoryItem[], consignments: ConsignmentItem[], items: OrderItem[]) {
+  const ingredients: Record<string, number> = {};
+  const consignmentQty: Record<string, number> = {};
+  items.forEach((item) => {
+    if (isConsignmentKey(item.menu)) {
+      const id = consignmentIdFromKey(item.menu);
+      consignmentQty[id] = (consignmentQty[id] || 0) + item.qty;
+    } else {
+      Object.entries(item.recipe ?? {}).forEach(([id, qty]) => { ingredients[id] = (ingredients[id] || 0) + qty * item.qty; });
+    }
+  });
+  return Object.entries(ingredients).every(([id, qty]) => (inventory.find((item) => item.id === id)?.qty ?? 0) >= qty)
+    && Object.entries(consignmentQty).every(([id, qty]) => (consignments.find((item) => item.id === id)?.qty ?? 0) >= qty);
+}
+function consumeConsignmentStock(items: ConsignmentItem[], orders: OrderItem[]) {
+  const used: Record<string, number> = {};
+  orders.forEach((order) => {
+    if (!isConsignmentKey(order.menu)) return;
+    const id = consignmentIdFromKey(order.menu);
+    used[id] = (used[id] || 0) + order.qty;
+  });
+  return items.map((item) => used[item.id] ? { ...item, qty: Math.max(0, item.qty - used[item.id]) } : item);
 }
 export function formatRp(value: number) { return `Rp ${value.toLocaleString('id-ID')}`; }

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Alert, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -50,11 +50,21 @@ export default function CashierScreen() {
 
   const haptic = () => { Haptics.selectionAsync().catch(() => undefined); };
   const toggleTable = (number: number) => { haptic(); setTables((current) => current.includes(number) ? current.filter((item) => item !== number) : [...current, number]); };
-  const confirmCancel = (id: string, tablesForOrder: number[]) => Alert.alert(
-    'Batalkan pesanan?',
-    `Pesanan ${tablesForOrder.map((table) => `M${table}`).join(' + ')} akan dihapus dan stoknya dikembalikan.`,
-    [{ text: 'Tidak', style: 'cancel' }, { text: 'Ya, batalkan', style: 'destructive', onPress: () => cancelOrder(id) }],
-  );
+  const confirmCancel = (id: string, tablesForOrder: number[]) => {
+    const tableLabel = tablesForOrder.length
+      ? tablesForOrder.map((table) => `M${table}`).join(' + ')
+      : 'tanpa meja';
+    const message = `Pesanan ${tableLabel} akan dihapus dan stoknya dikembalikan.`;
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Batalkan pesanan?\n\n${message}`)) cancelOrder(id);
+      return;
+    }
+    Alert.alert(
+      'Batalkan pesanan?',
+      message,
+      [{ text: 'Tidak', style: 'cancel' }, { text: 'Ya, batalkan', style: 'destructive', onPress: () => cancelOrder(id) }],
+    );
+  };
   const chooseMergeOrder = (order: typeof activeOrders[number]) => {
     if (!mergingOrderId) {
       haptic();

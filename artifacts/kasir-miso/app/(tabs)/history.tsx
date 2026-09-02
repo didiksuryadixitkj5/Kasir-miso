@@ -87,9 +87,9 @@ export default function HistoryScreen() {
             <View style={s.detailRow}>
               <Text style={[s.items, { color: c.mutedForeground }]}>
                  {sale.items.map((item) => {
-                   const name = isConsignmentKey(item.menu)
+                    const name = item.displayName ?? (isConsignmentKey(item.menu)
                      ? consignments.find((consignment) => consignment.id === consignmentIdFromKey(item.menu))?.name
-                     : menus.find((menu) => menu.id === item.menu)?.name;
+                      : menus.find((menu) => menu.id === item.menu)?.name);
                    return `${name || 'Item dihapus'} ×${item.qty}`;
                  }).join(' · ')}
               </Text>

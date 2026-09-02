@@ -11,9 +11,10 @@ export default function KitchenScreen() {
   const { menus, consignments, kitchenOrders, activeOrders, inventory, completeKitchen } = useWarung();
   const [addingTo, setAddingTo] = useState<ActiveOrder | null>(null);
   const lowStockCount = inventory.filter((item) => item.qty <= item.safe).length;
-  const itemName = (menuId: string) =>
-    menus.find((menu) => menu.id === menuId)?.name
-    ?? consignments.find((item) => `consignment:${item.id}` === menuId)?.name
+  const itemName = (item: ActiveOrder['items'][number]) =>
+    item.displayName
+    ?? menus.find((menu) => menu.id === item.menu)?.name
+    ?? consignments.find((consignment) => `consignment:${consignment.id}` === item.menu)?.name
     ?? 'Menu dihapus';
   return (
     <Screen>
@@ -32,7 +33,7 @@ export default function KitchenScreen() {
           return <Surface key={order.id} style={s.card}>
          <View style={s.row}><Badge tone={order.tables.length ? 'accent' : 'muted'}>{order.tables.length ? order.tables.map((table) => `M${table}`).join(' + ') : 'Tanpa meja'}</Badge><Text style={[s.time, { color: c.mutedForeground }]}>{order.createdAt}</Text></View>
          {!order.isAdditional ? <Text style={[s.pax, { color: c.foreground }]}>{order.pax} PELANGGAN</Text> : <Text style={[s.additionalLabel, { color: c.primary }]}>TAMBAHAN PESANAN</Text>}
-         {order.items.map((item, index) => <View key={`${item.menu}-${index}`} style={s.item}><Text style={[s.qty, { color: c.primary }]}>{item.qty}×</Text><Text style={[s.itemName, { color: c.foreground }]}>{itemName(item.menu)}</Text></View>)}
+         {order.items.map((item, index) => <View key={`${item.menu}-${index}`} style={s.item}><Text style={[s.qty, { color: c.primary }]}>{item.qty}×</Text><Text style={[s.itemName, { color: c.foreground }]}>{itemName(item)}</Text></View>)}
         {order.note ? <Text style={[s.note, { color: c.primary }]}><Ionicons name="chatbubble-outline" size={13} />  {order.note}</Text> : null}
          <View style={s.cardActions}>
            {parentOrder ? <Pressable onPress={() => setAddingTo(parentOrder)} style={({ pressed }) => [s.addButton, { borderColor: c.border, opacity: pressed ? 0.68 : 1 }]}><Ionicons name="add" size={17} color={c.primary} /><Text style={[s.addText, { color: c.primary }]}>Tambah menu</Text></Pressable> : null}

@@ -13,6 +13,8 @@ import {
 } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { Platform } from 'react-native';
+import * as Notifications from 'expo-notifications';
 import { WarungProvider } from '@/context/WarungContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { GoogleAccountProvider } from '@/context/GoogleAccountContext';
@@ -26,6 +28,17 @@ const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
 setBaseUrl(apiDomain ? `https://${apiDomain}` : null);
 
 const queryClient = new QueryClient();
+
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 function RootLayoutNav() {
   return (

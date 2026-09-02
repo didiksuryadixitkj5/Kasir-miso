@@ -10,19 +10,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Reminder = { id: string; title: string; time: string; completed: boolean };
 type ReminderTab = 'upcoming' | 'completed';
+type ScheduledReminder = { notificationId: string; signature: string };
+type ScheduledReminderIndex = Record<string, ScheduledReminder>;
 const STORAGE_KEY = 'warung-reminders-v1';
+const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v1';
 const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v2';
-
-if (Platform.OS !== 'web') {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-}
 
 function parseReminderTime(value: string) {
   const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
@@ -31,6 +23,37 @@ function parseReminderTime(value: string) {
   const minute = Number(match[2]);
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return { hour, minute };
+}
+
+function reminderSignature(item: Reminder) {
+  return `${item.title}\u0000${item.time}`;
+}
+
+function isReminderNotification(notification: Notifications.NotificationRequest) {
+  return typeof notification.content.data?.reminderId === 'string';
+}
+
+function readScheduledReminderIndex(raw: string | null): ScheduledReminderIndex {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([reminderId, value]) => {
+        if (
+          value
+          && typeof value === 'object'
+          && typeof (value as ScheduledReminder).notificationId === 'string'
+          && typeof (value as ScheduledReminder).signature === 'string'
+        ) {
+          return [[reminderId, value as ScheduledReminder]];
+        }
+        return [];
+      }),
+    );
+  } catch {
+    return {};
+  }
 }
 
 async function requestNotificationPermission() {
@@ -66,6 +89,7 @@ export default function RemindersScreen() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState('');
+  const [notificationSyncVersion, setNotificationSyncVersion] = useState(0);
   const browserNotified = useRef(new Set<string>());
   const notificationSyncQueue = useRef(Promise.resolve());
 
@@ -88,10 +112,34 @@ export default function RemindersScreen() {
   }, [hydrated, reminders]);
 
   const syncNativeNotifications = useCallback(async (items: Reminder[]) => {
-    if (Platform.OS === 'web') return 0;
-    await Notifications.cancelAllScheduledNotificationsAsync();
+    if (Platform.OS === 'web') return { activeCount: 0, expectedCount: 0 };
+    const desiredItems = items.filter((item) => !item.completed && parseReminderTime(item.time));
+    const desiredIds = new Set(desiredItems.map((item) => item.id));
     const permission = await Notifications.getPermissionsAsync();
-    if (!permission.granted) return 0;
+    if (!permission.granted) {
+      // Removals must still be cleaned up when notification permission is later revoked.
+      const [storedIndexRaw, scheduled] = await Promise.all([
+        AsyncStorage.getItem(NOTIFICATION_IDS_STORAGE_KEY),
+        Notifications.getAllScheduledNotificationsAsync(),
+      ]);
+      const storedIndex = readScheduledReminderIndex(storedIndexRaw);
+      const nextIndex = Object.fromEntries(
+        Object.entries(storedIndex).filter(([reminderId]) => desiredIds.has(reminderId)),
+      ) as ScheduledReminderIndex;
+      await AsyncStorage.setItem(NOTIFICATION_IDS_STORAGE_KEY, JSON.stringify(nextIndex));
+      const idsToCancel = new Set(
+        Object.entries(storedIndex)
+          .filter(([reminderId]) => !desiredIds.has(reminderId))
+          .map(([, entry]) => entry.notificationId),
+      );
+      scheduled.filter(isReminderNotification).forEach((notification) => {
+        if (!desiredIds.has(notification.content.data?.reminderId as string)) {
+          idsToCancel.add(notification.identifier);
+        }
+      });
+      await Promise.all([...idsToCancel].map((notificationId) => Notifications.cancelScheduledNotificationAsync(notificationId)));
+      return { activeCount: 0, expectedCount: desiredItems.length };
+    }
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL, {
         name: 'Pengingat',
@@ -101,23 +149,76 @@ export default function RemindersScreen() {
       });
     }
 
-    for (const item of items.filter((entry) => !entry.completed)) {
+    const [storedIndexRaw, scheduled] = await Promise.all([
+      AsyncStorage.getItem(NOTIFICATION_IDS_STORAGE_KEY),
+      Notifications.getAllScheduledNotificationsAsync(),
+    ]);
+    const storedIndex = readScheduledReminderIndex(storedIndexRaw);
+    const activeById = new Map(scheduled.map((notification) => [notification.identifier, notification]));
+    const nextIndex: ScheduledReminderIndex = {};
+    const replacedIds = new Set<string>();
+
+    for (const item of desiredItems) {
       const parsed = parseReminderTime(item.time);
-      if (!parsed) continue;
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Pengingat Kasir Miso',
-          body: item.title,
-          sound: 'default',
-          data: { reminderId: item.id },
-        },
-        trigger: Platform.OS === 'android'
-          ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed, channelId: ANDROID_NOTIFICATION_CHANNEL }
-          : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
-      });
+      if (!parsed) continue; // Guard retained for TypeScript and malformed stored records.
+      const signature = reminderSignature(item);
+      const previous = storedIndex[item.id];
+      const previousNotification = previous && activeById.get(previous.notificationId);
+      if (
+        previous
+        && previous.signature === signature
+        && previousNotification
+        && previousNotification.content.data?.reminderId === item.id
+      ) {
+        nextIndex[item.id] = previous;
+        continue;
+      }
+
+      try {
+        const notificationId = await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Pengingat Kasir Miso',
+            body: item.title,
+            sound: 'default',
+            data: { reminderId: item.id },
+          },
+          trigger: Platform.OS === 'android'
+            ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed, channelId: ANDROID_NOTIFICATION_CHANNEL }
+            : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
+        });
+        nextIndex[item.id] = { notificationId, signature };
+        if (previous?.notificationId) replacedIds.add(previous.notificationId);
+      } catch {
+        // Keep a working old schedule when a replacement could not be created.
+        if (previous && previousNotification) nextIndex[item.id] = previous;
+      }
     }
-    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
-    return scheduled.filter((notification) => Boolean(notification.content.data?.reminderId)).length;
+
+    // Persist new IDs before removing any prior schedules so a failed replacement never loses an alarm.
+    await AsyncStorage.setItem(NOTIFICATION_IDS_STORAGE_KEY, JSON.stringify(nextIndex));
+
+    const idsToCancel = new Set<string>();
+    Object.entries(storedIndex).forEach(([reminderId, entry]) => {
+      if (!nextIndex[reminderId] || replacedIds.has(entry.notificationId)) idsToCancel.add(entry.notificationId);
+    });
+    scheduled
+      .filter(isReminderNotification)
+      .forEach((notification) => {
+        const reminderId = notification.content.data?.reminderId as string;
+        const current = nextIndex[reminderId];
+        if (!desiredIds.has(reminderId) || (current && current.notificationId !== notification.identifier)) {
+          idsToCancel.add(notification.identifier);
+        }
+      });
+    await Promise.all([...idsToCancel].map((notificationId) => Notifications.cancelScheduledNotificationAsync(notificationId)));
+
+    const verified = await Notifications.getAllScheduledNotificationsAsync();
+    const activeCount = desiredItems.filter((item) => {
+      const entry = nextIndex[item.id];
+      const notification = entry && verified.find((candidate) => candidate.identifier === entry.notificationId);
+      return notification?.content.data?.reminderId === item.id;
+    }).length;
+    return { activeCount, expectedCount: desiredItems.length };
   }, []);
 
   useEffect(() => {
@@ -125,16 +226,17 @@ export default function RemindersScreen() {
     const snapshot = reminders;
     notificationSyncQueue.current = notificationSyncQueue.current
       .then(async () => {
-        const scheduledCount = await syncNativeNotifications(snapshot);
-        const activeCount = snapshot.filter((item) => !item.completed && parseReminderTime(item.time)).length;
-        if (Platform.OS !== 'web' && activeCount > 0 && scheduledCount !== activeCount) {
+        const { activeCount, expectedCount } = await syncNativeNotifications(snapshot);
+        if (Platform.OS !== 'web' && expectedCount > 0 && activeCount !== expectedCount) {
           setNotice('Sebagian pengingat belum berhasil dijadwalkan. Aktifkan izin Alarm & pengingat di pengaturan perangkat.');
+        } else if (Platform.OS !== 'web' && expectedCount > 0) {
+          setNotice('Pengingat tersimpan dan notifikasi aktif setiap hari.');
         }
       })
       .catch(() => {
         setNotice('Pengingat tersimpan, tetapi alarm perangkat belum dapat dijadwalkan. Aktifkan izin Alarm & pengingat di pengaturan perangkat.');
       });
-  }, [hydrated, reminders, syncNativeNotifications]);
+  }, [hydrated, reminders, notificationSyncVersion, syncNativeNotifications]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' || !hydrated) return;
@@ -165,24 +267,32 @@ export default function RemindersScreen() {
       setNotice('Masukkan waktu dengan format 00:00 sampai 23:59.');
       return;
     }
-    const permissionGranted = await requestNotificationPermission();
-    if (!permissionGranted) {
-      Alert.alert(
-        'Izin notifikasi diperlukan',
-        'Pengingat tetap dapat disimpan, tetapi notifikasi tidak akan muncul sebelum izin notifikasi diberikan.',
-      );
-    }
-    setReminders((items) => [...items, {
+    const newReminder: Reminder = {
       id: `${Date.now()}-${Math.random()}`,
       title: title.trim(),
       time: time.trim() || '08:00',
       completed: false,
-    }]);
+    };
+    const nextReminders = [...reminders, newReminder];
+    setReminders(nextReminders);
+    setNotice('Pengingat tersimpan. Menyiapkan notifikasi...');
     setTitle('');
     setTime('08:00');
     setComposerOpen(false);
     setActiveTab('upcoming');
-    setNotice(permissionGranted ? 'Pengingat tersimpan dan notifikasi aktif setiap hari.' : 'Pengingat tersimpan tanpa notifikasi.');
+    try {
+      const permissionGranted = await requestNotificationPermission();
+      if (!permissionGranted) {
+        Alert.alert(
+          'Izin notifikasi diperlukan',
+          'Pengingat tetap tersimpan, tetapi notifikasi tidak akan muncul sebelum izin notifikasi diberikan.',
+        );
+      }
+    } catch {
+      setNotice('Pengingat tersimpan, tetapi izin atau kanal notifikasi belum dapat disiapkan.');
+    } finally {
+      setNotificationSyncVersion((version) => version + 1);
+    }
   };
 
   const testNotification = async () => {

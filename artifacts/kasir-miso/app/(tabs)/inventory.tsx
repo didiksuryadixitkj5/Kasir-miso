@@ -34,11 +34,12 @@ export default function InventoryScreen() {
   const [consignmentSellPrice, setConsignmentSellPrice] = useState('');
   const [consignmentPackSize, setConsignmentPackSize] = useState('10');
   const [consignmentQty, setConsignmentQty] = useState('');
+  const [consignmentRemainder, setConsignmentRemainder] = useState(0);
   const [consignmentImageUri, setConsignmentImageUri] = useState<string | undefined>();
   const lowCount = inventory.filter((item) => item.qty <= item.safe).length;
   const resetMenu = () => { setMenuName(''); setMenuPrice(''); setMenuCategory('Bakso'); setMenuImageUri(undefined); setRecipeDraft({}); setEditingMenuId(null); setMenuOpen(false); };
   const resetStock = () => { setStockName(''); setUnit(''); setStockQty(''); setSafe(''); setEditingStockId(null); setStockOpen(false); };
-  const resetConsignment = () => { setConsignmentName(''); setConsignmentCost(''); setConsignmentSellPrice(''); setConsignmentPackSize('10'); setConsignmentQty(''); setConsignmentImageUri(undefined); setEditingConsignmentId(null); setConsignmentOpen(false); };
+  const resetConsignment = () => { setConsignmentName(''); setConsignmentCost(''); setConsignmentSellPrice(''); setConsignmentPackSize('10'); setConsignmentQty(''); setConsignmentRemainder(0); setConsignmentImageUri(undefined); setEditingConsignmentId(null); setConsignmentOpen(false); };
   const saveMenu = () => {
     const price = Number(menuPrice);
     if (!menuName.trim() || !Number.isFinite(price) || price <= 0) return Alert.alert('Menu belum lengkap', 'Isi nama dan harga menu dengan benar.');
@@ -111,6 +112,7 @@ export default function InventoryScreen() {
     setConsignmentSellPrice(String(item.sellPrice));
     setConsignmentPackSize(String(item.packSize || 1));
     setConsignmentQty(String(Math.floor(item.qty / (item.packSize || 1))));
+    setConsignmentRemainder(item.qty % (item.packSize || 1));
     setConsignmentImageUri(item.imageUri);
     setConsignmentOpen(true);
   };
@@ -132,7 +134,9 @@ export default function InventoryScreen() {
     if (!consignmentName.trim() || !Number.isFinite(cost) || !Number.isFinite(sellPrice) || !Number.isFinite(packSize) || !Number.isFinite(packCount) || cost < 0 || sellPrice < 0 || packSize <= 0 || !Number.isInteger(packSize) || packCount < 0 || !Number.isInteger(packCount)) {
       return Alert.alert('Titipan belum lengkap', 'Isi nama, harga per plastik, isi plastik, harga jual per biji, dan jumlah plastik dengan benar.');
     }
-    const quantity = packCount * packSize;
+    // The form edits whole packs. Keep pieces already sold from a partial pack
+    // instead of silently rounding the saved stock down on an unrelated edit.
+    const quantity = packCount * packSize + (editingConsignmentId ? consignmentRemainder : 0);
     if (editingConsignmentId) updateConsignment(editingConsignmentId, consignmentName.trim(), cost, sellPrice, quantity, packSize, consignmentImageUri);
     else addConsignment(consignmentName.trim(), cost, sellPrice, quantity, packSize, consignmentImageUri);
     resetConsignment();
