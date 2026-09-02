@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
+import * as Notifications from 'expo-notifications';
 import { useRouter } from 'expo-router';
 import { PrimaryButton, Screen, Surface } from '@/components/WarungUI';
 import { useColors } from '@/hooks/useColors';
@@ -10,6 +11,48 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 type Reminder = { id: string; title: string; time: string; completed: boolean };
 type ReminderTab = 'upcoming' | 'completed';
 const STORAGE_KEY = 'warung-reminders-v1';
+
+if (Platform.OS !== 'web') {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+function parseReminderTime(value: string) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return { hour, minute };
+}
+
+async function requestNotificationPermission() {
+  if (Platform.OS === 'web') {
+    if (typeof window === 'undefined' || !('Notification' in window)) return false;
+    if (Notification.permission === 'granted') return true;
+    return (await Notification.requestPermission()) === 'granted';
+  }
+
+  if (Platform.OS === 'android') {
+    await Notifications.setNotificationChannelAsync('reminders', {
+      name: 'Pengingat',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 250, 250],
+      sound: 'default',
+    });
+  }
+
+  const current = await Notifications.getPermissionsAsync();
+  if (current.granted) return true;
+  const requested = await Notifications.requestPermissionsAsync();
+  return requested.granted;
+}
 
 export default function RemindersScreen() {
   const c = useColors();
@@ -21,6 +64,8 @@ export default function RemindersScreen() {
   const [time, setTime] = useState('08:00');
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [hydrated, setHydrated] = useState(false);
+  const [notice, setNotice] = useState('');
+  const browserNotified = useRef(new Set<string>());
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
@@ -40,12 +85,74 @@ export default function RemindersScreen() {
     if (hydrated) void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(reminders));
   }, [hydrated, reminders]);
 
+  const syncNativeNotifications = useCallback(async (items: Reminder[]) => {
+    if (Platform.OS === 'web') return;
+    await Notifications.cancelAllScheduledNotificationsAsync();
+    const permissionGranted = await requestNotificationPermission();
+    if (!permissionGranted) return;
+
+    await Promise.all(items
+      .filter((item) => !item.completed)
+      .map(async (item) => {
+        const parsed = parseReminderTime(item.time);
+        if (!parsed) return;
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Pengingat Kasir Miso',
+            body: item.title,
+            sound: 'default',
+            data: { reminderId: item.id },
+          },
+          trigger: Platform.OS === 'android'
+            ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed, channelId: 'reminders' }
+            : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
+        });
+      }));
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    void syncNativeNotifications(reminders).catch(() => {
+      setNotice('Pengingat tersimpan, tetapi notifikasi perangkat belum dapat dijadwalkan.');
+    });
+  }, [hydrated, reminders, syncNativeNotifications]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !hydrated) return;
+    const checkBrowserReminders = () => {
+      if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
+      const now = new Date();
+      const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+      const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+      reminders.filter((item) => !item.completed && item.time === currentTime).forEach((item) => {
+        const key = `${item.id}:${today}`;
+        if (browserNotified.current.has(key)) return;
+        browserNotified.current.add(key);
+        new Notification('Pengingat Kasir Miso', { body: item.title });
+      });
+    };
+    checkBrowserReminders();
+    const timer = setInterval(checkBrowserReminders, 30000);
+    return () => clearInterval(timer);
+  }, [hydrated, reminders]);
+
   const upcoming = useMemo(() => reminders.filter((item) => !item.completed), [reminders]);
   const completed = useMemo(() => reminders.filter((item) => item.completed), [reminders]);
   const visibleReminders = activeTab === 'upcoming' ? upcoming : completed;
 
-  const addReminder = () => {
+  const addReminder = async () => {
     if (!title.trim()) return;
+    if (!parseReminderTime(time)) {
+      setNotice('Masukkan waktu dengan format 00:00 sampai 23:59.');
+      return;
+    }
+    const permissionGranted = await requestNotificationPermission();
+    if (!permissionGranted) {
+      Alert.alert(
+        'Izin notifikasi diperlukan',
+        'Pengingat tetap dapat disimpan, tetapi notifikasi tidak akan muncul sebelum izin notifikasi diberikan.',
+      );
+    }
     setReminders((items) => [...items, {
       id: `${Date.now()}-${Math.random()}`,
       title: title.trim(),
@@ -56,6 +163,7 @@ export default function RemindersScreen() {
     setTime('08:00');
     setComposerOpen(false);
     setActiveTab('upcoming');
+    setNotice(permissionGranted ? 'Pengingat tersimpan dan notifikasi aktif setiap hari.' : 'Pengingat tersimpan tanpa notifikasi.');
   };
 
   const toggleReminder = (id: string) => {
@@ -107,6 +215,7 @@ export default function RemindersScreen() {
       {composerOpen ? (
         <Surface style={[s.composer, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[s.composerTitle, { color: c.foreground }]}>Pengingat baru</Text>
+          <Text style={[s.composerHint, { color: c.mutedForeground }]}>Notifikasi akan muncul setiap hari pada jam ini.</Text>
           <TextInput
             autoFocus
             value={title}
@@ -179,6 +288,12 @@ export default function RemindersScreen() {
           </Text>
         </View>
       )}
+      {notice ? (
+        <View style={[s.notice, { backgroundColor: c.secondary }]}>
+          <Ionicons name="notifications-outline" size={17} color={c.primary} />
+          <Text style={[s.noticeText, { color: c.secondaryForeground }]}>{notice}</Text>
+        </View>
+      ) : null}
       <View style={{ height: Math.max(0, insets.bottom) }} />
     </Screen>
   );
@@ -195,6 +310,7 @@ const s = StyleSheet.create({
   tabIndicator: { position: 'absolute', bottom: -1, left: 0, right: 0, height: 2 },
   composer: { padding: 14, marginTop: 15, marginBottom: 8 },
   composerTitle: { fontSize: 15, fontWeight: '800', marginBottom: 9 },
+  composerHint: { fontSize: 11, lineHeight: 16, marginTop: -4, marginBottom: 9 },
   input: { height: 46, borderWidth: 1, borderRadius: 13, paddingHorizontal: 12, fontSize: 13, marginBottom: 8 },
   composerRow: { flexDirection: 'row', gap: 8 },
   timeInput: { width: 82, height: 46, borderWidth: 1, borderRadius: 13, paddingHorizontal: 10, fontSize: 13, textAlign: 'center' },
@@ -219,6 +335,8 @@ const s = StyleSheet.create({
   illustrationLine: { width: 240, height: 5, borderRadius: 3, position: 'absolute', bottom: 0 },
   emptyTitle: { fontSize: 19, fontWeight: '700', textAlign: 'center', maxWidth: 360 },
   emptyBody: { fontSize: 12, textAlign: 'center', marginTop: 7, maxWidth: 260, lineHeight: 18 },
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 11, borderRadius: 14, marginTop: 14 },
+  noticeText: { flex: 1, fontSize: 11, lineHeight: 16, fontWeight: '700' },
   fabRow: { flexDirection: 'row', justifyContent: 'flex-end' },
   fab: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', boxShadow: '0px 4px 8px rgba(10, 10, 10, 0.16)', elevation: 5 },
 });
