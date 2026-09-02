@@ -39,7 +39,7 @@
         "expo-notifications",
         {
           "sounds": [
-            "./assets/sounds/kasir-miso-notification.wav"
+            "./assets/sounds/kasir_miso_notification.wav"
           ]
         }
       ]

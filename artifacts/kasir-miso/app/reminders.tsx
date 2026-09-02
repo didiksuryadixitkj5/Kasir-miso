@@ -27,7 +27,7 @@ type ReminderTab = 'upcoming' | 'completed';
 const STORAGE_KEY = 'warung-reminders-v1';
 const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v3';
 const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v3';
-const NOTIFICATION_SOUND = 'kasir-miso-notification.wav';
+const NOTIFICATION_SOUND = 'kasir_miso_notification.wav';
 
 function isReminderNotification(notification: Notifications.NotificationRequest) {
   return typeof notification.content.data?.reminderId === 'string';
