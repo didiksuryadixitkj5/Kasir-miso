@@ -16,6 +16,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { WarungProvider } from '@/context/WarungContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { GoogleAccountProvider } from '@/context/GoogleAccountContext';
+import { OnlineBackupProvider } from '@/context/OnlineBackupContext';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -58,11 +59,13 @@ export default function RootLayout() {
           <ThemeProvider>
             <WarungProvider>
                 <GoogleAccountProvider>
-                  <GestureHandlerRootView style={{ flex: 1 }}>
-                    <KeyboardProvider>
-                      <RootLayoutNav />
-                    </KeyboardProvider>
-                  </GestureHandlerRootView>
+                  <OnlineBackupProvider>
+                    <GestureHandlerRootView style={{ flex: 1 }}>
+                      <KeyboardProvider>
+                        <RootLayoutNav />
+                      </KeyboardProvider>
+                    </GestureHandlerRootView>
+                  </OnlineBackupProvider>
                 </GoogleAccountProvider>
             </WarungProvider>
           </ThemeProvider>

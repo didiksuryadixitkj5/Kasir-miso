@@ -2,14 +2,23 @@ import React, { useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Alert, BackHandler, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { reloadAppAsync } from 'expo';
 import { useRouter } from 'expo-router';
 import { PageHeader, Screen, Surface } from '@/components/WarungUI';
 import { useColors } from '@/hooks/useColors';
 import { useWarung } from '@/context/WarungContext';
 import { useGoogleAccount } from '@/context/GoogleAccountContext';
+import { useOnlineBackup } from '@/context/OnlineBackupContext';
 
 const OFFLINE_BACKUP_KEY = 'warung-offline-backup-v1';
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+const formatBackupTime = (value: string) => {
+  if (!value) return 'Belum pernah dibackup';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Backup tersimpan';
+  return `Terakhir ${date.toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })}`;
+};
 
 function MenuRow({
   icon,
@@ -60,11 +69,16 @@ export default function OtherScreen() {
     request,
     promptAsync,
     clientConfigured: googleClientConfigured,
+    hasDriveAccess,
+    authError,
     logout: logoutGoogle,
   } = useGoogleAccount();
+  const onlineBackup = useOnlineBackup();
   const [accountSheetVisible, setAccountSheetVisible] = useState(false);
   const [notice, setNotice] = useState('');
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const accountReady = isAccountConnected && hasDriveAccess;
+  const isOnlineBusy = onlineBackup.status === 'backing-up' || onlineBackup.status === 'restoring';
 
   const handleGoogleConnect = () => {
     if (!googleClientConfigured) {
@@ -146,6 +160,52 @@ export default function OtherScreen() {
     }
   };
 
+  const handleOnlineBackup = async () => {
+    if (!hasDriveAccess) {
+      setNotice('Hubungkan akun Google agar aplikasi mendapat izin backup ke Drive.');
+      setAccountSheetVisible(true);
+      return;
+    }
+    try {
+      const createdAt = await onlineBackup.backupNow();
+      setNotice(`Backup Google Drive berhasil disimpan ${formatBackupTime(createdAt).toLowerCase()}.`);
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : 'Backup Google Drive belum berhasil.');
+    }
+  };
+
+  const handleRestoreOnline = () => {
+    if (!hasDriveAccess) {
+      setNotice('Hubungkan akun Google Drive sebelum memulihkan backup.');
+      setAccountSheetVisible(true);
+      return;
+    }
+    Alert.alert(
+      'Pulihkan backup Google Drive?',
+      'Semua data Kasir Miso di perangkat ini akan diganti dengan isi backup terbaru dari Google Drive.',
+      [
+        { text: 'Batal', style: 'cancel' },
+        {
+          text: 'Pulihkan',
+          style: 'destructive',
+          onPress: () => {
+            void onlineBackup.restoreLatest()
+              .then(() => {
+                Alert.alert(
+                  'Pemulihan selesai',
+                  'Backup berhasil dipulihkan. Muat ulang aplikasi untuk menggunakan seluruh data.',
+                  [{ text: 'Muat ulang', onPress: () => void reloadAppAsync() }],
+                );
+              })
+              .catch((reason) => {
+                setNotice(reason instanceof Error ? reason.message : 'Pemulihan backup belum berhasil.');
+              });
+          },
+        },
+      ],
+    );
+  };
+
   const showComingSoon = (label: string) => {
     setNotice(`${label} belum tersedia. Tombolnya sudah disiapkan untuk pengembangan berikutnya.`);
   };
@@ -202,37 +262,43 @@ export default function OtherScreen() {
       <Pressable
         testID="google-account-button"
         accessibilityRole="button"
-        accessibilityLabel={isAccountConnected ? 'Kelola akun Google' : 'Hubungkan akun Google'}
+        accessibilityLabel={accountReady ? 'Kelola akun Google Drive' : 'Hubungkan akun Google Drive'}
         onPress={() => setAccountSheetVisible(true)}
         style={({ pressed }) => [
           s.accountCard,
           {
-            backgroundColor: isAccountConnected ? c.primary : c.card,
-            borderColor: isAccountConnected ? c.primary : c.border,
+            backgroundColor: accountReady ? c.primary : c.card,
+            borderColor: accountReady ? c.primary : c.border,
             opacity: pressed ? 0.78 : 1,
           },
         ]}
       >
-        <View style={[s.accountIcon, { backgroundColor: isAccountConnected ? c.primaryForeground : c.secondary }]}>
+        <View style={[s.accountIcon, { backgroundColor: accountReady ? c.primaryForeground : c.secondary }]}>
           <Ionicons
             name="logo-google"
             size={23}
-            color={isAccountConnected ? c.primary : c.mutedForeground}
+            color={accountReady ? c.primary : c.mutedForeground}
           />
         </View>
         <View style={s.accountCopy}>
-          <Text style={[s.accountTitle, { color: isAccountConnected ? c.primaryForeground : c.foreground }]}>
-            {!accountHydrated ? 'Memuat status akun...' : isAccountConnected ? 'Akun Google terhubung' : 'Hubungkan akun Google'}
+          <Text style={[s.accountTitle, { color: accountReady ? c.primaryForeground : c.foreground }]}>
+            {!accountHydrated ? 'Memuat status akun...' : accountReady ? 'Google Drive terhubung' : 'Hubungkan Google Drive'}
           </Text>
-          <Text style={[s.accountDetail, { color: isAccountConnected ? c.primaryForeground : c.mutedForeground }]}>
-            {!accountHydrated ? 'Mohon tunggu sebentar' : isAccountConnected ? (accountEmail || 'Login berhasil dan siap digunakan') : 'Login aman dengan akun Google'}
+          <Text style={[s.accountDetail, { color: accountReady ? c.primaryForeground : c.mutedForeground }]}>
+            {!accountHydrated
+              ? 'Mohon tunggu sebentar'
+              : accountReady
+                ? `${accountEmail || 'Akun Google'} · backup otomatis aktif`
+                : isAccountConnected
+                  ? 'Hubungkan ulang untuk mengaktifkan akses Drive'
+                  : 'Satu login untuk akun dan backup online'}
           </Text>
         </View>
-        <View style={[s.accountStatus, { backgroundColor: isAccountConnected ? c.primaryForeground : c.muted }]}>
+        <View style={[s.accountStatus, { backgroundColor: accountReady ? c.primaryForeground : c.muted }]}>
           <Ionicons
-            name={isAccountConnected ? 'checkmark' : 'arrow-forward'}
+            name={accountReady ? 'checkmark' : 'arrow-forward'}
             size={17}
-            color={isAccountConnected ? c.primary : c.mutedForeground}
+            color={accountReady ? c.primary : c.mutedForeground}
           />
         </View>
       </Pressable>
@@ -259,6 +325,24 @@ export default function OtherScreen() {
 
       <Text style={[s.groupTitle, { color: c.mutedForeground }]}>Utilitas</Text>
       <Surface style={s.menuCard}>
+        <MenuRow
+          icon="cloud-upload-outline"
+          label="Backup Online"
+          detail={accountReady ? formatBackupTime(onlineBackup.lastBackupAt) : 'Hubungkan Google Drive untuk mengaktifkan'}
+          testID="online-backup-button"
+          disabled={isOnlineBusy}
+          onPress={() => void handleOnlineBackup()}
+        />
+        <View style={[s.rowDivider, { backgroundColor: c.border }]} />
+        <MenuRow
+          icon="cloud-download-outline"
+          label="Pulihkan dari Google Drive"
+          detail="Ganti data perangkat dengan backup terbaru"
+          testID="online-restore-button"
+          disabled={isOnlineBusy}
+          onPress={handleRestoreOnline}
+        />
+        <View style={[s.rowDivider, { backgroundColor: c.border }]} />
         <MenuRow
           icon="download-outline"
           label="Backup Offline"
@@ -303,10 +387,12 @@ export default function OtherScreen() {
         />
       </Surface>
 
-      {notice ? (
+      {notice || authError || onlineBackup.error ? (
         <View style={[s.notice, { backgroundColor: c.secondary }]}>
           <Ionicons name="information-circle-outline" size={17} color={c.primary} />
-          <Text style={[s.noticeText, { color: c.secondaryForeground }]}>{notice}</Text>
+          <Text style={[s.noticeText, { color: c.secondaryForeground }]}>
+            {notice || authError || onlineBackup.error}
+          </Text>
         </View>
       ) : null}
 
@@ -333,29 +419,29 @@ export default function OtherScreen() {
             </View>
             <Text style={[s.sheetKicker, { color: c.primary }]}>AKUN & SINKRONISASI</Text>
             <Text style={[s.sheetTitle, { color: c.foreground }]}>
-              {isAccountConnected ? 'Akun Google siap dipakai' : 'Hubungkan akun Google'}
+              {accountReady ? 'Google Drive siap dipakai' : 'Hubungkan Google Drive'}
             </Text>
             <Text style={[s.sheetBody, { color: c.mutedForeground }]}>
-              Gunakan akun Google untuk mengidentifikasi akun Anda di Kasir Miso. Fitur backup online dapat ditambahkan nanti.
+              Satu kali login menghubungkan identitas Google sekaligus izin backup Kasir Miso ke Google Drive akun yang sama.
             </Text>
 
             <View style={[s.privacyNote, { backgroundColor: c.secondary }]}>
               <Ionicons name="shield-checkmark-outline" size={20} color={c.primary} />
               <Text style={[s.privacyText, { color: c.secondaryForeground }]}>
-                Aplikasi hanya meminta identitas dasar akun: nama dan email.
+                Aplikasi meminta nama, email, dan izin untuk file Drive yang dibuat oleh Kasir Miso. File Drive lainnya tidak dapat dibaca.
               </Text>
             </View>
 
             <Pressable
               testID="google-connect-button"
               accessibilityRole="button"
-              accessibilityLabel={isAccountConnected ? 'Ganti akun Google' : 'Hubungkan dengan Google'}
+              accessibilityLabel={accountReady ? 'Ganti akun Google Drive' : 'Hubungkan dengan Google Drive'}
               onPress={handleGoogleConnect}
               style={({ pressed }) => [s.primaryAction, { backgroundColor: c.primary, opacity: pressed ? 0.78 : 1 }]}
             >
               <Ionicons name="logo-google" size={19} color={c.primaryForeground} />
               <Text style={[s.primaryActionText, { color: c.primaryForeground }]}>
-                {isAccountConnected ? 'Ganti akun Google' : 'Hubungkan dengan Google'}
+                {accountReady ? 'Ganti akun Google Drive' : 'Hubungkan dengan Google Drive'}
               </Text>
             </Pressable>
 

@@ -34,7 +34,7 @@ Aplikasi kasir mobile untuk warung dan usaha kuliner kecil.
 - Data entered in the mobile app is persisted locally with AsyncStorage so the kasir remains usable offline.
 - The Expo app is kept as a frontend-first artifact; server-backed features can be added through the shared API later.
 - Expo package versions are kept aligned with the installed SDK before starting Metro.
-- Google account login uses direct Expo OAuth with `openid`, `profile`, and `email`; configure the three public Client IDs documented in `artifacts/kasir-miso/GOOGLE_SETUP.md`. Drive backup is intentionally deferred.
+- Google account login uses direct Expo OAuth with `openid`, `profile`, `email`, and `drive.file`; the same login enables automatic Drive backup and manual restore. Configure Google Drive API and the public Client IDs documented in `artifacts/kasir-miso/GOOGLE_SETUP.md`.
 
 ## Product
 
