@@ -14,3 +14,17 @@ mtime_ms = 1788339606367
 storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:f76ba586-9769-44c4-90f8-41959264d92c/ddcb2233-f6a9-425a-ba8d-e760944a3149/fcfc94b4-803f-488b-a982-236f3f32b482"
 storage_version_token = "1788339648509598"
 content_type = "application/octet-stream"
+
+[[outputs]]
+id = "Rl8FfzdwqEKepYUi3kwJA"
+uri = "file://exports/kasir-miso-v7.0.0.zip"
+type = "unspecified"
+title = "Kasir Miso v7.0.0 — ZIP Portable"
+description = "Source portable Kasir Miso versi 7.0.0 beserta API/library terkait dan nada notifikasi custom. ZIP sudah divalidasi dan tidak menyertakan node_modules, secret, token, atau output build sementara."
+logical_id = "ebc828eb-ac52-4cb8-99f1-2c8c090ce970"
+content_hash = "sha256:4fee280539fbbf36d290ba97b16e5b03f7e09128d32dc55c50512fa3614624f5"
+size = 2773809
+mtime_ms = 1788351560629
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:f76ba586-9769-44c4-90f8-41959264d92c/ebc828eb-ac52-4cb8-99f1-2c8c090ce970/93c0d3fe-be9a-4187-9669-da7273ac7d34"
+storage_version_token = "1788351583248349"
+content_type = "application/octet-stream"

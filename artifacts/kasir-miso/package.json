@@ -1,6 +1,6 @@
 {
   "name": "@workspace/kasir-miso",
-  "version": "6.9.1",
+  "version": "7.0.0",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
