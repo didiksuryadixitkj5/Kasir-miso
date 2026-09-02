@@ -20,8 +20,9 @@ import {
 
 type ReminderTab = 'upcoming' | 'completed';
 const STORAGE_KEY = 'warung-reminders-v1';
-const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v1';
-const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v2';
+const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v2';
+const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v3';
+const NOTIFICATION_SOUND = 'kasir-miso-notification.wav';
 
 function isReminderNotification(notification: Notifications.NotificationRequest) {
   return typeof notification.content.data?.reminderId === 'string';
@@ -39,7 +40,7 @@ async function requestNotificationPermission() {
       name: 'Pengingat',
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
-      sound: 'default',
+      sound: NOTIFICATION_SOUND,
     });
   }
 
@@ -116,7 +117,7 @@ export default function RemindersScreen() {
         name: 'Pengingat',
         importance: Notifications.AndroidImportance.HIGH,
         vibrationPattern: [0, 250, 250, 250],
-        sound: 'default',
+        sound: NOTIFICATION_SOUND,
       });
     }
 
@@ -150,7 +151,8 @@ export default function RemindersScreen() {
           content: {
             title: 'Pengingat Kasir Miso',
             body: item.title,
-            sound: 'default',
+            sound: NOTIFICATION_SOUND,
+            priority: Notifications.AndroidNotificationPriority.MAX,
             data: { reminderId: item.id },
           },
           trigger: Platform.OS === 'android'
@@ -292,15 +294,11 @@ export default function RemindersScreen() {
           content: {
             title: 'Tes Pengingat Kasir Miso',
             body: 'Notifikasi dan suara sudah aktif.',
-            sound: 'default',
+            sound: NOTIFICATION_SOUND,
+            priority: Notifications.AndroidNotificationPriority.MAX,
           },
           trigger: Platform.OS === 'android'
-            ? {
-                type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
-                seconds: 1,
-                repeats: false,
-                channelId: ANDROID_NOTIFICATION_CHANNEL,
-              }
+            ? { channelId: ANDROID_NOTIFICATION_CHANNEL }
             : null,
         });
       }
