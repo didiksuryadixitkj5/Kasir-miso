@@ -30,6 +30,10 @@ jelas dan tidak tertukar.
    EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=...
    ```
 
+   Alternatif untuk APK portable: isi tiga nilai publik tersebut langsung pada
+   `expo.extra.googleClientIds` di `app.json`. Kode aplikasi akan memakai nilai
+   `app.json` jika environment variable tidak tersedia saat build.
+
 5. Jalankan aplikasi:
 
    ```bash
