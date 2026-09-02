@@ -83,7 +83,6 @@ interface State {
   menus: MenuItem[]; activeOrders: ActiveOrder[]; kitchenOrders: ActiveOrder[]; inventory: InventoryItem[]; consignments: ConsignmentItem[]; expenses: Expense[]; sales: Sale[]; savingsRules: SavingsRule[]; savingsEntries: SavingsEntry[]; qrisImageUri?: string;
 }
 interface ContextValue extends State {
-  resetData: () => void;
   addMenu: (name: string, price: number, recipe?: Record<string, number>, category?: string, imageUri?: string) => void;
   updateMenu: (id: string, name: string, price: number, recipe?: Record<string, number>, category?: string, imageUri?: string) => void;
   deleteMenu: (id: string) => void;
@@ -187,7 +186,6 @@ export function WarungProvider({ children }: { children: ReactNode }) {
   }, [hydrated, state]);
   const value = useMemo<ContextValue>(() => ({
     ...state,
-    resetData: () => setState(defaultState),
     addMenu: (name, price, recipe = {}, category = 'Lainnya', imageUri) => setState(s => ({ ...s, menus: [...s.menus, { id: makeId(), name, price, recipe, category, imageUri }] })),
     updateMenu: (id, name, price, recipe = {}, category = 'Lainnya', imageUri) => setState(s => ({ ...s, menus: s.menus.map(item => item.id === id ? { ...item, name, price, recipe, category, imageUri } : item) })),
     deleteMenu: id => setState(s => ({ ...s, menus: s.menus.filter(item => item.id !== id) })),
