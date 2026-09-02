@@ -39,6 +39,10 @@ const googleClientConfigured = Platform.select({
   android: Boolean(process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || configuredGoogleClientIds.android),
   default: false,
 });
+const googleServerConfigured = Boolean(
+  process.env.EXPO_PUBLIC_API_BASE_URL?.trim()
+  || process.env.EXPO_PUBLIC_DOMAIN?.trim(),
+);
 
 type GoogleAccountContextValue = {
   isConnected: boolean;
@@ -49,6 +53,7 @@ type GoogleAccountContextValue = {
   request: ReturnType<typeof Google.useAuthRequest>[0];
   promptAsync: ReturnType<typeof Google.useAuthRequest>[2];
   clientConfigured: boolean;
+  serverConfigured: boolean;
   uploadDriveBackup: (content: string, expectedModifiedTime: string | null) => Promise<{ modifiedTime: string }>;
   downloadDriveBackup: () => Promise<{ content: string; modifiedTime: string | null }>;
   logout: () => Promise<void>;
@@ -315,6 +320,7 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
     request,
     promptAsync,
     clientConfigured: Boolean(googleClientConfigured),
+    serverConfigured: googleServerConfigured,
     uploadDriveBackup,
     downloadDriveBackup,
     logout,

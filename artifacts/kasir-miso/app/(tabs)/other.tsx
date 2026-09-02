@@ -69,6 +69,7 @@ export default function OtherScreen() {
     request,
     promptAsync,
     clientConfigured: googleClientConfigured,
+    serverConfigured: googleServerConfigured,
     hasDriveAccess,
     authError,
     logout: logoutGoogle,
@@ -81,6 +82,13 @@ export default function OtherScreen() {
   const isOnlineBusy = onlineBackup.status === 'backing-up' || onlineBackup.status === 'restoring';
 
   const handleGoogleConnect = async () => {
+    if (!googleServerConfigured) {
+      setAccountSheetVisible(false);
+      setNotice(
+        'Server backup belum terhubung ke APK. Publikasikan API Server, isi EXPO_PUBLIC_API_BASE_URL dengan alamat publiknya, lalu buat APK baru.',
+      );
+      return;
+    }
     if (!googleClientConfigured) {
       setAccountSheetVisible(false);
       setNotice(
@@ -309,7 +317,9 @@ export default function OtherScreen() {
                 ? `${accountEmail || 'Akun Google'} · backup otomatis aktif`
                 : isAccountConnected
                   ? 'Hubungkan ulang untuk mengaktifkan akses Drive'
-                  : 'Satu login untuk akun dan backup online'}
+                  : googleServerConfigured
+                    ? 'Satu login untuk akun dan backup online'
+                    : 'Server backup APK belum dikonfigurasi'}
           </Text>
         </View>
         <View style={[s.accountStatus, { backgroundColor: accountReady ? c.primaryForeground : c.muted }]}>
@@ -454,12 +464,17 @@ export default function OtherScreen() {
               testID="google-connect-button"
               accessibilityRole="button"
               accessibilityLabel={accountReady ? 'Ganti akun Google Drive' : 'Hubungkan dengan Google Drive'}
+              disabled={!googleServerConfigured}
               onPress={() => void handleGoogleConnect()}
               style={({ pressed }) => [s.primaryAction, { backgroundColor: c.primary, opacity: pressed ? 0.78 : 1 }]}
             >
               <Ionicons name="logo-google" size={19} color={c.primaryForeground} />
               <Text style={[s.primaryActionText, { color: c.primaryForeground }]}>
-                {accountReady ? 'Ganti akun Google Drive' : 'Hubungkan dengan Google Drive'}
+                {accountReady
+                  ? 'Ganti akun Google Drive'
+                  : googleServerConfigured
+                    ? 'Hubungkan dengan Google Drive'
+                    : 'Server backup belum siap'}
               </Text>
             </Pressable>
 

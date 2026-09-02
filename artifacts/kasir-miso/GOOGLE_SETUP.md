@@ -17,9 +17,12 @@ identitas akun sekaligus menyimpan backup online ke Google Drive akun yang sama.
    - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`
    - `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`
    - `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
-7. Secret `GOOGLE_OAUTH_CLIENT_SECRET` untuk Web OAuth disimpan sebagai Replit
+7. URL publik API Server pada `EXPO_PUBLIC_API_BASE_URL`, contohnya
+   `https://nama-aplikasi.replit.app`. URL preview `.replit.dev` tidak boleh
+   dipakai untuk APK karena tidak stabil.
+8. Secret `GOOGLE_OAUTH_CLIENT_SECRET` untuk Web OAuth disimpan sebagai Replit
    Secret. Jangan pernah memakai nama `EXPO_PUBLIC_` untuk client secret.
-8. Environment variable server `GOOGLE_OAUTH_CLIENT_IDS` berisi daftar Client ID
+9. Environment variable server `GOOGLE_OAUTH_CLIENT_IDS` berisi daftar Client ID
    yang diizinkan, dipisahkan koma. Jika hanya Web Client ID yang dipakai, server
    juga dapat membaca `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
 
@@ -67,6 +70,11 @@ dibuat oleh layanan build lain, `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` harus
 tersedia pada environment layanan tersebut **saat proses build berlangsung**.
 Jika tidak, Client ID tidak masuk ke JavaScript bundle APK dan login Google akan
 ditolak.
+
+`EXPO_PUBLIC_API_BASE_URL` juga wajib tersedia saat build APK dan harus menunjuk
+ke deployment API Server yang publik. Tanpa URL ini, consent Google dapat
+berhasil tetapi aplikasi tidak bisa menukar authorization code menjadi session,
+sehingga akun tidak akan tampil dan tombol akan meminta login ulang.
 
 OAuth Client Android di Google Cloud juga harus memakai:
 
