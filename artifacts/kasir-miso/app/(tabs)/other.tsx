@@ -1,26 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Google from 'expo-auth-session/providers/google';
 import { Alert, BackHandler, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { PageHeader, Screen, Surface } from '@/components/WarungUI';
 import { useColors } from '@/hooks/useColors';
 import { useWarung } from '@/context/WarungContext';
+import { useGoogleAccount } from '@/context/GoogleAccountContext';
 
 const OFFLINE_BACKUP_KEY = 'warung-offline-backup-v1';
-const GOOGLE_CONNECTION_KEY = 'warung-google-connection-v1';
-const GOOGLE_ACCOUNT_EMAIL_KEY = 'warung-google-account-email-v1';
-const GOOGLE_CLIENT_ID_FALLBACK = 'google-client-id-not-configured';
-const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
-const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
-const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
-const googleClientConfigured = Platform.select({
-  web: Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
-  ios: Boolean(process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID),
-  android: Boolean(process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID),
-  default: false,
-});
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 function MenuRow({
@@ -65,89 +53,18 @@ export default function OtherScreen() {
   const c = useColors();
   const router = useRouter();
   const warung = useWarung();
+  const {
+    isConnected: isAccountConnected,
+    email: accountEmail,
+    hydrated: accountHydrated,
+    request,
+    promptAsync,
+    clientConfigured: googleClientConfigured,
+    logout: logoutGoogle,
+  } = useGoogleAccount();
   const [accountSheetVisible, setAccountSheetVisible] = useState(false);
-  const [isAccountConnected, setIsAccountConnected] = useState(false);
-  const [accountEmail, setAccountEmail] = useState('');
-  const [accountHydrated, setAccountHydrated] = useState(false);
   const [notice, setNotice] = useState('');
   const [isBackingUp, setIsBackingUp] = useState(false);
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    webClientId: googleWebClientId,
-    iosClientId: googleIosClientId,
-    androidClientId: googleAndroidClientId,
-    scopes: ['openid', 'profile', 'email'],
-    selectAccount: true,
-  });
-
-  useEffect(() => {
-    Promise.all([
-      AsyncStorage.getItem(GOOGLE_CONNECTION_KEY),
-      AsyncStorage.getItem(GOOGLE_ACCOUNT_EMAIL_KEY),
-    ])
-      .then(([saved, email]) => {
-        setIsAccountConnected(saved === 'connected');
-        setAccountEmail(email ?? '');
-      })
-      .catch(() => setNotice('Status akun Google belum dapat dimuat.'))
-      .finally(() => setAccountHydrated(true));
-  }, []);
-
-  useEffect(() => {
-    if (accountHydrated && !isAccountConnected) {
-      void AsyncStorage.setItem(GOOGLE_CONNECTION_KEY, 'disconnected');
-    }
-  }, [accountHydrated, isAccountConnected]);
-
-  useEffect(() => {
-    if (!response) return;
-    if (response.type !== 'success') {
-      if (response.type === 'dismiss' || response.type === 'cancel') {
-        setNotice('Login Google dibatalkan.');
-      } else {
-        setNotice('Login Google belum berhasil. Coba lagi.');
-      }
-      return;
-    }
-
-    const accessToken = response.authentication?.accessToken ?? response.params?.access_token;
-    if (!accessToken) {
-      setNotice('Google tidak mengembalikan token login. Coba lagi.');
-      return;
-    }
-
-    let mounted = true;
-    (async () => {
-      try {
-        let email = '';
-        try {
-          const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (profileResponse.ok) {
-            const profile = (await profileResponse.json()) as { email?: string };
-            email = profile.email ?? '';
-          }
-        } catch {
-          // The Google connection is still valid even if profile lookup is unavailable.
-        }
-        await Promise.all([
-          AsyncStorage.setItem(GOOGLE_CONNECTION_KEY, 'connected'),
-          AsyncStorage.setItem(GOOGLE_ACCOUNT_EMAIL_KEY, email),
-        ]);
-        if (mounted) {
-          setAccountEmail(email);
-          setIsAccountConnected(true);
-          setAccountSheetVisible(false);
-        setNotice(email ? `Akun ${email} berhasil terhubung.` : 'Akun Google berhasil terhubung.');
-        }
-      } catch {
-        if (mounted) setNotice('Koneksi Google belum dapat disimpan. Coba lagi.');
-      }
-    })();
-    return () => {
-      mounted = false;
-    };
-  }, [response]);
 
   const handleGoogleConnect = () => {
     if (!googleClientConfigured) {
@@ -170,9 +87,7 @@ export default function OtherScreen() {
         text: 'Logout',
         style: 'destructive',
         onPress: () => {
-          void AsyncStorage.multiRemove([GOOGLE_CONNECTION_KEY, GOOGLE_ACCOUNT_EMAIL_KEY]);
-          setIsAccountConnected(false);
-          setAccountEmail('');
+          void logoutGoogle();
           setAccountSheetVisible(false);
           setNotice('Akun Google sudah logout dari perangkat ini.');
         },

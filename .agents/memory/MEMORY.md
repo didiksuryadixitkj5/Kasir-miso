@@ -1,1 +1,2 @@
 - [Expo project imports](expo-imports.md) — align native module versions with the workspace Expo SDK before relying on Metro startup.
+- [Google OAuth callback handling](google-oauth-callback.md) — keep AuthSession mounted at app root because callbacks can return to a different route.
