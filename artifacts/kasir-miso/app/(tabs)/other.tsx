@@ -80,10 +80,14 @@ export default function OtherScreen() {
   const accountReady = isAccountConnected && hasDriveAccess;
   const isOnlineBusy = onlineBackup.status === 'backing-up' || onlineBackup.status === 'restoring';
 
-  const handleGoogleConnect = () => {
+  const handleGoogleConnect = async () => {
     if (!googleClientConfigured) {
       setAccountSheetVisible(false);
-      setNotice('Google belum dikonfigurasi. Tambahkan Client ID OAuth untuk Web, Android, dan iOS terlebih dahulu.');
+      setNotice(
+        Platform.OS === 'android'
+          ? 'Client ID Google Android tidak ikut dalam build APK. Tambahkan EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ke environment build lalu buat APK baru.'
+          : 'Google belum dikonfigurasi untuk platform ini. Tambahkan Client ID OAuth ke environment build.',
+      );
       return;
     }
     if (!request) {
@@ -91,7 +95,21 @@ export default function OtherScreen() {
       return;
     }
     setNotice('Membuka login Google...');
-    void promptAsync();
+    try {
+      const result = await promptAsync();
+      if (result.type === 'error') {
+        const detail = result.params?.error_description || result.params?.error;
+        setNotice(
+          detail
+            ? `Login Google ditolak: ${detail}`
+            : 'Login Google ditolak. Periksa Client ID Android, package com.kasirwarung.app, dan SHA-1 penandatangan APK.',
+        );
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        setNotice('Login Google ditutup. Jika popup hilang sendiri, periksa Client ID Android dan SHA-1 APK di Google Cloud.');
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? `Login Google gagal: ${error.message}` : 'Login Google gagal dibuka.');
+    }
   };
 
   const handleGoogleDisconnect = () => {
@@ -436,7 +454,7 @@ export default function OtherScreen() {
               testID="google-connect-button"
               accessibilityRole="button"
               accessibilityLabel={accountReady ? 'Ganti akun Google Drive' : 'Hubungkan dengan Google Drive'}
-              onPress={handleGoogleConnect}
+              onPress={() => void handleGoogleConnect()}
               style={({ pressed }) => [s.primaryAction, { backgroundColor: c.primary, opacity: pressed ? 0.78 : 1 }]}
             >
               <Ionicons name="logo-google" size={19} color={c.primaryForeground} />

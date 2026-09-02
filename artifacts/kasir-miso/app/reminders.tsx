@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import * as Notifications from 'expo-notifications';
@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 type Reminder = { id: string; title: string; time: string; completed: boolean };
 type ReminderTab = 'upcoming' | 'completed';
 const STORAGE_KEY = 'warung-reminders-v1';
+const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v2';
 
 if (Platform.OS !== 'web') {
   Notifications.setNotificationHandler({
@@ -40,7 +41,7 @@ async function requestNotificationPermission() {
   }
 
   if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('reminders', {
+    await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL, {
       name: 'Pengingat',
       importance: Notifications.AndroidImportance.HIGH,
       vibrationPattern: [0, 250, 250, 250],
@@ -66,6 +67,7 @@ export default function RemindersScreen() {
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState('');
   const browserNotified = useRef(new Set<string>());
+  const notificationSyncQueue = useRef(Promise.resolve());
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY)
@@ -88,33 +90,42 @@ export default function RemindersScreen() {
   const syncNativeNotifications = useCallback(async (items: Reminder[]) => {
     if (Platform.OS === 'web') return;
     await Notifications.cancelAllScheduledNotificationsAsync();
-    const permissionGranted = await requestNotificationPermission();
-    if (!permissionGranted) return;
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted) return;
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL, {
+        name: 'Pengingat',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 250, 250],
+        sound: 'default',
+      });
+    }
 
-    await Promise.all(items
-      .filter((item) => !item.completed)
-      .map(async (item) => {
-        const parsed = parseReminderTime(item.time);
-        if (!parsed) return;
-        await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'Pengingat Kasir Miso',
-            body: item.title,
-            sound: 'default',
-            data: { reminderId: item.id },
-          },
-          trigger: Platform.OS === 'android'
-            ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed, channelId: 'reminders' }
-            : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
-        });
-      }));
+    for (const item of items.filter((entry) => !entry.completed)) {
+      const parsed = parseReminderTime(item.time);
+      if (!parsed) continue;
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: 'Pengingat Kasir Miso',
+          body: item.title,
+          sound: 'default',
+          data: { reminderId: item.id },
+        },
+        trigger: Platform.OS === 'android'
+          ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed, channelId: ANDROID_NOTIFICATION_CHANNEL }
+          : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
+      });
+    }
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    void syncNativeNotifications(reminders).catch(() => {
-      setNotice('Pengingat tersimpan, tetapi notifikasi perangkat belum dapat dijadwalkan.');
-    });
+    const snapshot = reminders;
+    notificationSyncQueue.current = notificationSyncQueue.current
+      .then(() => syncNativeNotifications(snapshot))
+      .catch(() => {
+        setNotice('Pengingat tersimpan, tetapi notifikasi perangkat belum dapat dijadwalkan.');
+      });
   }, [hydrated, reminders, syncNativeNotifications]);
 
   useEffect(() => {
@@ -164,6 +175,52 @@ export default function RemindersScreen() {
     setComposerOpen(false);
     setActiveTab('upcoming');
     setNotice(permissionGranted ? 'Pengingat tersimpan dan notifikasi aktif setiap hari.' : 'Pengingat tersimpan tanpa notifikasi.');
+  };
+
+  const testNotification = async () => {
+    try {
+      const permissionGranted = await requestNotificationPermission();
+      if (!permissionGranted) {
+        setNotice('Izin notifikasi belum aktif. Aktifkan notifikasi Kasir Miso di pengaturan perangkat.');
+        if (Platform.OS !== 'web') {
+          const permission = await Notifications.getPermissionsAsync();
+          if (!permission.canAskAgain) {
+            Alert.alert(
+              'Notifikasi diblokir',
+              'Buka pengaturan aplikasi dan aktifkan izin notifikasi serta suara.',
+              [
+                { text: 'Batal', style: 'cancel' },
+                { text: 'Buka pengaturan', onPress: () => void Linking.openSettings() },
+              ],
+            );
+          }
+        }
+        return;
+      }
+
+      if (Platform.OS === 'web') {
+        new Notification('Tes Pengingat Kasir Miso', { body: 'Jika pesan ini muncul, notifikasi browser sudah aktif.' });
+      } else {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Tes Pengingat Kasir Miso',
+            body: 'Notifikasi dan suara sudah aktif.',
+            sound: 'default',
+          },
+          trigger: Platform.OS === 'android'
+            ? {
+                type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+                seconds: 1,
+                repeats: false,
+                channelId: ANDROID_NOTIFICATION_CHANNEL,
+              }
+            : null,
+        });
+      }
+      setNotice('Notifikasi uji dikirim. Pastikan volume notifikasi perangkat tidak dibisukan.');
+    } catch {
+      setNotice('Notifikasi uji gagal dikirim. Periksa izin notifikasi di pengaturan perangkat.');
+    }
   };
 
   const toggleReminder = (id: string) => {
@@ -237,6 +294,15 @@ export default function RemindersScreen() {
               <PrimaryButton testID="add-reminder" onPress={addReminder} icon="checkmark-circle-outline">Simpan</PrimaryButton>
             </View>
           </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Uji bunyi notifikasi"
+            onPress={() => void testNotification()}
+            style={({ pressed }) => [s.testNotificationButton, { borderColor: c.border, opacity: pressed ? 0.65 : 1 }]}
+          >
+            <Ionicons name="notifications-outline" size={17} color={c.primary} />
+            <Text style={[s.testNotificationText, { color: c.primary }]}>Uji bunyi notifikasi</Text>
+          </Pressable>
         </Surface>
       ) : null}
 
@@ -315,6 +381,8 @@ const s = StyleSheet.create({
   composerRow: { flexDirection: 'row', gap: 8 },
   timeInput: { width: 82, height: 46, borderWidth: 1, borderRadius: 13, paddingHorizontal: 10, fontSize: 13, textAlign: 'center' },
   composerButton: { flex: 1 },
+  testNotificationButton: { minHeight: 40, borderWidth: 1, borderRadius: 12, marginTop: 9, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  testNotificationText: { fontSize: 12, fontWeight: '800' },
   list: { paddingTop: 18 },
   reminderRow: { minHeight: 64, borderWidth: 1, borderRadius: 16, padding: 10, flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
   checkButton: { width: 37, height: 37, borderRadius: 13, alignItems: 'center', justifyContent: 'center', marginRight: 10 },

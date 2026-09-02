@@ -43,6 +43,23 @@ aplikasi tersebut. Kasir Miso hanya dapat mencari, membuat, memperbarui, dan
 membaca file Drive yang dibuat oleh aplikasi sendiri. File backup bernama
 `Kasir Miso Backup.json`.
 
+## Saat membuat APK
+
+Replit Secrets hanya tersedia pada workflow yang berjalan di Replit. Jika APK
+dibuat oleh layanan build lain, `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID` harus
+tersedia pada environment layanan tersebut **saat proses build berlangsung**.
+Jika tidak, Client ID tidak masuk ke JavaScript bundle APK dan login Google akan
+ditolak.
+
+OAuth Client Android di Google Cloud juga harus memakai:
+
+- Package name `com.kasirwarung.app`.
+- SHA-1 dari sertifikat yang benar-benar menandatangani APK tersebut.
+
+APK debug, APK dari layanan cloud, dan APK produksi dapat memakai sertifikat
+berbeda. Client ID yang benar tetapi SHA-1 tidak cocok tetap akan menyebabkan
+login gagal atau jendela login langsung tertutup.
+
 Backup otomatis berjalan setelah data usaha berubah dan secara berkala selama
 aplikasi terbuka. Pemulihan dilakukan manual dari menu **Lainnya → Pulihkan dari
 Google Drive**. Kredensial Google, token OAuth, dan backup offline lokal tidak
