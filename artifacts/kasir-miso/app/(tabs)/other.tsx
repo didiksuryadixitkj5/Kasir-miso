@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Alert, BackHandler, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import * as Google from 'expo-auth-session/providers/google';
+import * as SecureStore from 'expo-secure-store';
+import { Alert, BackHandler, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { PageHeader, Screen, Surface } from '@/components/WarungUI';
@@ -8,6 +10,19 @@ import { useColors } from '@/hooks/useColors';
 import { useWarung } from '@/context/WarungContext';
 
 const OFFLINE_BACKUP_KEY = 'warung-offline-backup-v1';
+const GOOGLE_CONNECTION_KEY = 'warung-google-connection-v1';
+const GOOGLE_ACCESS_TOKEN_KEY = 'warung-google-access-token-v1';
+const GOOGLE_ACCOUNT_EMAIL_KEY = 'warung-google-account-email-v1';
+const GOOGLE_CLIENT_ID_FALLBACK = 'google-client-id-not-configured';
+const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
+const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
+const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
+const googleClientConfigured = Platform.select({
+  web: Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID),
+  ios: Boolean(process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID),
+  android: Boolean(process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID),
+  default: false,
+});
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 function MenuRow({
@@ -52,8 +67,123 @@ export default function OtherScreen() {
   const c = useColors();
   const router = useRouter();
   const warung = useWarung();
+  const [accountSheetVisible, setAccountSheetVisible] = useState(false);
+  const [isAccountConnected, setIsAccountConnected] = useState(false);
+  const [accountEmail, setAccountEmail] = useState('');
+  const [accountHydrated, setAccountHydrated] = useState(false);
   const [notice, setNotice] = useState('');
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    webClientId: googleWebClientId,
+    iosClientId: googleIosClientId,
+    androidClientId: googleAndroidClientId,
+    scopes: ['openid', 'profile', 'email'],
+    selectAccount: true,
+  });
+
+  useEffect(() => {
+    Promise.all([
+      AsyncStorage.getItem(GOOGLE_CONNECTION_KEY),
+      AsyncStorage.getItem(GOOGLE_ACCOUNT_EMAIL_KEY),
+      SecureStore.getItemAsync(GOOGLE_ACCESS_TOKEN_KEY),
+    ])
+      .then(([saved, email, accessToken]) => {
+        setIsAccountConnected(saved === 'connected' && Boolean(accessToken));
+        setAccountEmail(email ?? '');
+      })
+      .catch(() => setNotice('Status akun Google belum dapat dimuat.'))
+      .finally(() => setAccountHydrated(true));
+  }, []);
+
+  useEffect(() => {
+    if (accountHydrated && !isAccountConnected) {
+      void AsyncStorage.setItem(GOOGLE_CONNECTION_KEY, 'disconnected');
+    }
+  }, [accountHydrated, isAccountConnected]);
+
+  useEffect(() => {
+    if (!response) return;
+    if (response.type !== 'success') {
+      if (response.type === 'dismiss' || response.type === 'cancel') {
+        setNotice('Login Google dibatalkan.');
+      } else {
+        setNotice('Login Google belum berhasil. Coba lagi.');
+      }
+      return;
+    }
+
+    const accessToken = response.authentication?.accessToken ?? response.params?.access_token;
+    if (!accessToken) {
+      setNotice('Google tidak mengembalikan token login. Coba lagi.');
+      return;
+    }
+
+    let mounted = true;
+    (async () => {
+      try {
+        await SecureStore.setItemAsync(GOOGLE_ACCESS_TOKEN_KEY, accessToken);
+        let email = '';
+        try {
+          const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (profileResponse.ok) {
+            const profile = (await profileResponse.json()) as { email?: string };
+            email = profile.email ?? '';
+          }
+        } catch {
+          // The Google connection is still valid even if profile lookup is unavailable.
+        }
+        await Promise.all([
+          AsyncStorage.setItem(GOOGLE_CONNECTION_KEY, 'connected'),
+          AsyncStorage.setItem(GOOGLE_ACCOUNT_EMAIL_KEY, email),
+        ]);
+        if (mounted) {
+          setAccountEmail(email);
+          setIsAccountConnected(true);
+          setAccountSheetVisible(false);
+        setNotice(email ? `Akun ${email} berhasil terhubung.` : 'Akun Google berhasil terhubung.');
+        }
+      } catch {
+        if (mounted) setNotice('Koneksi Google belum dapat disimpan. Coba lagi.');
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [response]);
+
+  const handleGoogleConnect = () => {
+    if (!googleClientConfigured) {
+      setAccountSheetVisible(false);
+      setNotice('Google belum dikonfigurasi. Tambahkan Client ID OAuth untuk Web, Android, dan iOS terlebih dahulu.');
+      return;
+    }
+    if (!request) {
+      setNotice('Login Google sedang disiapkan. Coba lagi sebentar.');
+      return;
+    }
+    setNotice('Membuka login Google...');
+    void promptAsync();
+  };
+
+  const handleGoogleDisconnect = () => {
+    Alert.alert('Putuskan akun Google?', 'Koneksi akun Google akan dihapus dari perangkat ini. Data usaha lokal tetap tersimpan.', [
+      { text: 'Batal', style: 'cancel' },
+      {
+        text: 'Putuskan',
+        style: 'destructive',
+        onPress: () => {
+          void SecureStore.deleteItemAsync(GOOGLE_ACCESS_TOKEN_KEY);
+          void AsyncStorage.multiRemove([GOOGLE_CONNECTION_KEY, GOOGLE_ACCOUNT_EMAIL_KEY]);
+          setIsAccountConnected(false);
+          setAccountEmail('');
+          setAccountSheetVisible(false);
+          setNotice('Akun Google sudah diputuskan dari perangkat ini.');
+        },
+      },
+    ]);
+  };
 
   const createBackup = () => ({
     format: 'kasir-miso-backup',
@@ -158,6 +288,45 @@ export default function OtherScreen() {
         ))}
       </View>
 
+      <Text style={[s.groupTitle, { color: c.mutedForeground }]}>Akun & sinkronisasi</Text>
+      <Pressable
+        testID="google-account-button"
+        accessibilityRole="button"
+        accessibilityLabel={isAccountConnected ? 'Kelola akun Google' : 'Hubungkan akun Google'}
+        onPress={() => setAccountSheetVisible(true)}
+        style={({ pressed }) => [
+          s.accountCard,
+          {
+            backgroundColor: isAccountConnected ? c.primary : c.card,
+            borderColor: isAccountConnected ? c.primary : c.border,
+            opacity: pressed ? 0.78 : 1,
+          },
+        ]}
+      >
+        <View style={[s.accountIcon, { backgroundColor: isAccountConnected ? c.primaryForeground : c.secondary }]}>
+          <Ionicons
+            name="logo-google"
+            size={23}
+            color={isAccountConnected ? c.primary : c.mutedForeground}
+          />
+        </View>
+        <View style={s.accountCopy}>
+          <Text style={[s.accountTitle, { color: isAccountConnected ? c.primaryForeground : c.foreground }]}>
+            {isAccountConnected ? 'Akun Google terhubung' : 'Hubungkan akun Google'}
+          </Text>
+          <Text style={[s.accountDetail, { color: isAccountConnected ? c.primaryForeground : c.mutedForeground }]}>
+            {isAccountConnected ? (accountEmail || 'Login berhasil dan siap digunakan') : 'Login aman dengan akun Google'}
+          </Text>
+        </View>
+        <View style={[s.accountStatus, { backgroundColor: isAccountConnected ? c.primaryForeground : c.muted }]}>
+          <Ionicons
+            name={isAccountConnected ? 'checkmark' : 'arrow-forward'}
+            size={17}
+            color={isAccountConnected ? c.primary : c.mutedForeground}
+          />
+        </View>
+      </Pressable>
+
       <Text style={[s.groupTitle, { color: c.mutedForeground }]}>Manajemen</Text>
       <Surface style={s.menuCard}>
         <MenuRow icon="business-outline" label="Profil Usaha" onPress={() => router.push('/business-profile')} />
@@ -231,6 +400,69 @@ export default function OtherScreen() {
         </View>
       ) : null}
 
+      <Modal
+        visible={accountSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAccountSheetVisible(false)}
+      >
+        <View style={[s.sheetBackdrop, { backgroundColor: c.foreground + 'B8' }]}>
+          <View style={[s.accountSheet, { backgroundColor: c.card }]}>
+            <View style={s.sheetTopline}>
+              <View style={[s.sheetGoogleIcon, { backgroundColor: c.secondary }]}>
+                <Ionicons name="logo-google" size={25} color={c.primary} />
+              </View>
+              <Pressable
+                testID="close-google-account-sheet"
+                accessibilityLabel="Tutup pengaturan akun Google"
+                onPress={() => setAccountSheetVisible(false)}
+                hitSlop={8}
+              >
+                <Ionicons name="close-circle" size={28} color={c.mutedForeground} />
+              </Pressable>
+            </View>
+            <Text style={[s.sheetKicker, { color: c.primary }]}>AKUN & SINKRONISASI</Text>
+            <Text style={[s.sheetTitle, { color: c.foreground }]}>
+              {isAccountConnected ? 'Akun Google siap dipakai' : 'Hubungkan akun Google'}
+            </Text>
+            <Text style={[s.sheetBody, { color: c.mutedForeground }]}>
+              Gunakan akun Google untuk mengidentifikasi akun Anda di Kasir Miso. Fitur backup online dapat ditambahkan nanti.
+            </Text>
+
+            <View style={[s.privacyNote, { backgroundColor: c.secondary }]}>
+              <Ionicons name="shield-checkmark-outline" size={20} color={c.primary} />
+              <Text style={[s.privacyText, { color: c.secondaryForeground }]}>
+                Aplikasi hanya meminta identitas dasar akun: nama dan email.
+              </Text>
+            </View>
+
+            <Pressable
+              testID="google-connect-button"
+              accessibilityRole="button"
+              accessibilityLabel={isAccountConnected ? 'Ganti akun Google' : 'Hubungkan dengan Google'}
+              onPress={handleGoogleConnect}
+              style={({ pressed }) => [s.primaryAction, { backgroundColor: c.primary, opacity: pressed ? 0.78 : 1 }]}
+            >
+              <Ionicons name="logo-google" size={19} color={c.primaryForeground} />
+              <Text style={[s.primaryActionText, { color: c.primaryForeground }]}>
+                {isAccountConnected ? 'Ganti akun Google' : 'Hubungkan dengan Google'}
+              </Text>
+            </Pressable>
+
+            {isAccountConnected ? (
+              <Pressable
+                testID="google-disconnect-button"
+                accessibilityRole="button"
+                accessibilityLabel="Putuskan akun Google"
+                onPress={handleGoogleDisconnect}
+                style={({ pressed }) => [s.secondaryAction, { opacity: pressed ? 0.62 : 1 }]}
+              >
+                <Text style={[s.secondaryActionText, { color: c.destructive }]}>Putuskan akun Google</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -241,6 +473,12 @@ const s = StyleSheet.create({
   shortcutIcon: { width: 58, height: 58, borderRadius: 17, alignItems: 'center', justifyContent: 'center', marginBottom: 9 },
   shortcutLabel: { fontSize: 12, fontWeight: '700', textAlign: 'center' },
   groupTitle: { fontSize: 13, fontWeight: '600', marginTop: 17, marginBottom: 8, marginLeft: 4 },
+  accountCard: { minHeight: 82, borderWidth: 1, borderRadius: 22, padding: 13, flexDirection: 'row', alignItems: 'center' },
+  accountIcon: { width: 48, height: 48, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  accountCopy: { flex: 1, paddingHorizontal: 12 },
+  accountTitle: { fontSize: 14, fontWeight: '800' },
+  accountDetail: { fontSize: 11, marginTop: 4, lineHeight: 15 },
+  accountStatus: { width: 31, height: 31, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
   menuCard: { padding: 0, overflow: 'hidden' },
   menuRow: { minHeight: 67, paddingHorizontal: 14, paddingVertical: 10, flexDirection: 'row', alignItems: 'center' },
   menuIcon: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginRight: 13 },
@@ -250,6 +488,19 @@ const s = StyleSheet.create({
   rowDivider: { height: 1, marginLeft: 65 },
   notice: { minHeight: 44, borderRadius: 14, paddingHorizontal: 12, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 12 },
   noticeText: { flex: 1, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  sheetBackdrop: { flex: 1, justifyContent: 'flex-end' },
+  accountSheet: { borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 28 },
+  sheetTopline: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  sheetGoogleIcon: { width: 50, height: 50, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  sheetKicker: { fontSize: 10, fontWeight: '800', letterSpacing: 1.3 },
+  sheetTitle: { fontSize: 23, fontWeight: '800', marginTop: 4 },
+  sheetBody: { fontSize: 12, lineHeight: 18, marginTop: 7 },
+  privacyNote: { minHeight: 52, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10, flexDirection: 'row', alignItems: 'center', gap: 9, marginTop: 18 },
+  privacyText: { flex: 1, fontSize: 11, lineHeight: 16, fontWeight: '700' },
+  primaryAction: { minHeight: 52, borderRadius: 16, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 9, marginTop: 18 },
+  primaryActionText: { fontSize: 14, fontWeight: '800' },
+  secondaryAction: { minHeight: 45, alignItems: 'center', justifyContent: 'center', marginTop: 4 },
+  secondaryActionText: { fontSize: 12, fontWeight: '800' },
   actionCard: { minHeight: 148, padding: 17, flexDirection: 'row', alignItems: 'center', marginBottom: 12 },
   actionIcon: { width: 58, height: 58, borderRadius: 19, alignItems: 'center', justifyContent: 'center', marginRight: 14 },
   actionCopy: { flex: 1 },
