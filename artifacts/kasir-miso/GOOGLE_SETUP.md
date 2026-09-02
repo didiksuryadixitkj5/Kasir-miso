@@ -30,9 +30,13 @@ Client Secret tidak boleh dimasukkan ke aplikasi mobile atau ke chat.
 
 - Android package: `com.kasirwarung.app`
 - iOS bundle identifier: `com.kasirwarung.app`
+- Native OAuth redirect: `com.kasirwarung.app:/oauthredirect`
 - Scope login: `openid`, `profile`, `email`, dan
   `https://www.googleapis.com/auth/drive.file`
 - Untuk Android, Google Cloud dapat meminta SHA-1 signing certificate.
+- Aktifkan **Enable custom URI scheme** pada Advanced Settings OAuth Client
+  Android. Scheme aplikasi dan redirect native harus tetap
+  `com.kasirwarung.app`.
 - Untuk iOS, gunakan bundle identifier yang sama saat membuat OAuth client.
 - Untuk Web, tambahkan alamat preview berikut ke **Authorized JavaScript origins**
   dan **Authorized redirect URIs** pada Web OAuth Client:

@@ -88,10 +88,10 @@ export default function RemindersScreen() {
   }, [hydrated, reminders]);
 
   const syncNativeNotifications = useCallback(async (items: Reminder[]) => {
-    if (Platform.OS === 'web') return;
+    if (Platform.OS === 'web') return 0;
     await Notifications.cancelAllScheduledNotificationsAsync();
     const permission = await Notifications.getPermissionsAsync();
-    if (!permission.granted) return;
+    if (!permission.granted) return 0;
     if (Platform.OS === 'android') {
       await Notifications.setNotificationChannelAsync(ANDROID_NOTIFICATION_CHANNEL, {
         name: 'Pengingat',
@@ -116,15 +116,23 @@ export default function RemindersScreen() {
           : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
       });
     }
+    const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+    return scheduled.filter((notification) => Boolean(notification.content.data?.reminderId)).length;
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
     const snapshot = reminders;
     notificationSyncQueue.current = notificationSyncQueue.current
-      .then(() => syncNativeNotifications(snapshot))
+      .then(async () => {
+        const scheduledCount = await syncNativeNotifications(snapshot);
+        const activeCount = snapshot.filter((item) => !item.completed && parseReminderTime(item.time)).length;
+        if (Platform.OS !== 'web' && activeCount > 0 && scheduledCount !== activeCount) {
+          setNotice('Sebagian pengingat belum berhasil dijadwalkan. Aktifkan izin Alarm & pengingat di pengaturan perangkat.');
+        }
+      })
       .catch(() => {
-        setNotice('Pengingat tersimpan, tetapi notifikasi perangkat belum dapat dijadwalkan.');
+        setNotice('Pengingat tersimpan, tetapi alarm perangkat belum dapat dijadwalkan. Aktifkan izin Alarm & pengingat di pengaturan perangkat.');
       });
   }, [hydrated, reminders, syncNativeNotifications]);
 

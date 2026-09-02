@@ -28,6 +28,7 @@ const configuredGoogleClientIds = (Constants.expoConfig?.extra?.googleClientIds 
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || configuredGoogleClientIds.web || GOOGLE_CLIENT_ID_FALLBACK;
 const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || configuredGoogleClientIds.ios || GOOGLE_CLIENT_ID_FALLBACK;
 const googleAndroidClientId = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || configuredGoogleClientIds.android || GOOGLE_CLIENT_ID_FALLBACK;
+const nativeGoogleRedirectUri = 'com.kasirwarung.app:/oauthredirect';
 
 const googleClientConfigured = Platform.select({
   web: Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || configuredGoogleClientIds.web),
@@ -65,6 +66,7 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
     webClientId: googleWebClientId,
     iosClientId: googleIosClientId,
     androidClientId: googleAndroidClientId,
+    redirectUri: Platform.OS === 'web' ? undefined : nativeGoogleRedirectUri,
     scopes: ['openid', 'profile', 'email', 'https://www.googleapis.com/auth/drive.file'],
     responseType: 'code',
     shouldAutoExchangeCode: false,

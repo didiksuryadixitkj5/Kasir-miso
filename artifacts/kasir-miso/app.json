@@ -5,7 +5,7 @@
     "version": "6.9.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "kasir-miso",
+    "scheme": "com.kasirwarung.app",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
@@ -18,7 +18,10 @@
       "bundleIdentifier": "com.kasirwarung.app"
     },
     "android": {
-      "package": "com.kasirwarung.app"
+      "package": "com.kasirwarung.app",
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
