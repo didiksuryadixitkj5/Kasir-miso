@@ -27,8 +27,12 @@ Client Secret tidak boleh dimasukkan ke aplikasi mobile atau ke chat.
 - Scope login: `openid`, `profile`, dan `email`
 - Untuk Android, Google Cloud dapat meminta SHA-1 signing certificate.
 - Untuk iOS, gunakan bundle identifier yang sama saat membuat OAuth client.
-- Untuk Web, tambahkan domain/redirect URI yang ditampilkan oleh Expo AuthSession
-  pada environment yang digunakan.
+- Untuk Web, tambahkan alamat preview berikut ke **Authorized JavaScript origins**
+  dan **Authorized redirect URIs** pada Web OAuth Client:
+  `https://f76ba586-9769-44c4-90f8-41959264d92c-00-27nro1o6bur0.expo.sisko.replit.dev`
+  Gunakan alamat persis seperti di atas, tanpa menambahkan path atau slash di akhir.
+  Jika alamat preview berubah, gunakan alamat terbaru yang muncul pada pesan error
+  Google dan perbarui dua daftar tersebut.
 
 Setelah Client ID disimpan sebagai environment variable, muat ulang workflow
 Expo. Tombol **Hubungkan akun Google** akan membuka consent screen Google. Setelah
