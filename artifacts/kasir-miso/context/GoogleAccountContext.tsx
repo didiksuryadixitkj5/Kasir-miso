@@ -1,7 +1,10 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
+
+WebBrowser.maybeCompleteAuthSession();
 
 const GOOGLE_CONNECTION_KEY = 'warung-google-connection-v1';
 const GOOGLE_ACCOUNT_EMAIL_KEY = 'warung-google-account-email-v1';
@@ -33,6 +36,7 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
   const [isConnected, setIsConnected] = useState(false);
   const [email, setEmail] = useState('');
   const [hydrated, setHydrated] = useState(false);
+  const authResponseHandled = useRef(false);
   const [request, response, promptAsync] = Google.useAuthRequest({
     webClientId: googleWebClientId,
     iosClientId: googleIosClientId,
@@ -47,8 +51,10 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
       AsyncStorage.getItem(GOOGLE_ACCOUNT_EMAIL_KEY),
     ])
       .then(([saved, savedEmail]) => {
-        setIsConnected(saved === 'connected');
-        setEmail(savedEmail ?? '');
+        if (!authResponseHandled.current) {
+          setIsConnected(saved === 'connected');
+          setEmail(savedEmail ?? '');
+        }
       })
       .finally(() => setHydrated(true));
   }, []);
@@ -57,7 +63,11 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
     if (!response || response.type !== 'success') return;
 
     const accessToken = response.authentication?.accessToken ?? response.params?.access_token;
-    if (!accessToken) return;
+    if (!accessToken) {
+      console.warn('[GoogleAccount] OAuth succeeded without an access token', response.params);
+      return;
+    }
+    authResponseHandled.current = true;
 
     let mounted = true;
     (async () => {
