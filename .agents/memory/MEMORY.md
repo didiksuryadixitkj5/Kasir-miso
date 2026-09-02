@@ -1,0 +1,1 @@
+- [Expo project imports](expo-imports.md) — align native module versions with the workspace Expo SDK before relying on Metro startup.
