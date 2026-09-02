@@ -1,0 +1,16 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "k6aGHkFrqvrMNir_BWqIj"
+uri = "file://exports/kasir-miso-portable.zip"
+type = "unspecified"
+title = "Kasir Miso — ZIP Portable"
+description = "Source code dan asset Kasir Miso untuk dipindahkan ke komputer lain. Secret, token, node_modules, dan cache dikeluarkan dari arsip."
+logical_id = "ddcb2233-f6a9-425a-ba8d-e760944a3149"
+content_hash = "sha256:29121fa9bd2004052ba1ca842f6ad8af37ec187b03f33dda048d7baccec5d271"
+size = 2621588
+mtime_ms = 1788334717533
+storage_uri = "gcs://replit-rams-assets-sisko/rams/assets/repl:f76ba586-9769-44c4-90f8-41959264d92c/ddcb2233-f6a9-425a-ba8d-e760944a3149/5f25992b-e000-46a9-9b00-18ca14450c79"
+storage_version_token = "1788334725130313"
+content_type = "application/octet-stream"
