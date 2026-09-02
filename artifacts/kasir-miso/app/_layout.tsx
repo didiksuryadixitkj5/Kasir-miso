@@ -49,6 +49,7 @@ function RootLayoutNav() {
       <Stack.Screen name="staff" options={{ headerShown: false }} />
       <Stack.Screen name="reminders" options={{ headerShown: false }} />
       <Stack.Screen name="settings" options={{ headerShown: false }} />
+      <Stack.Screen name="oauthredirect" options={{ headerShown: false }} />
     </Stack>
   );
 }
