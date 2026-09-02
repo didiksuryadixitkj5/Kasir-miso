@@ -15,4 +15,6 @@ export interface GoogleConnectionInput {
   redirectUri: string;
   /** @minLength 1 */
   clientId: string;
+  /** @minLength 16 */
+  deviceId: string;
 }

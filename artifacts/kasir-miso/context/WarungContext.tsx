@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import { persistImageUri } from '@/utils/persistentImage';
+import { appendOrderItems, cancelActiveOrder, submitOrder } from '@/domain/warungTransactions';
 
 export type MenuKey = string;
 export type PaymentMethod = 'Tunai' | 'QRIS';
@@ -89,10 +90,10 @@ export function isDateInReportPeriod(date: string, period: ReportPeriod, now: Da
   const startDate = localDate(weekStart);
   return date >= startDate && date <= today;
 }
-interface State {
+export interface WarungState {
   menus: MenuItem[]; activeOrders: ActiveOrder[]; kitchenOrders: ActiveOrder[]; inventory: InventoryItem[]; consignments: ConsignmentItem[]; expenses: Expense[]; sales: Sale[]; savingsRules: SavingsRule[]; savingsEntries: SavingsEntry[]; qrisImageUri?: string;
 }
-interface ContextValue extends State {
+interface ContextValue extends WarungState {
   hydrated: boolean;
   addMenu: (name: string, price: number, recipe?: Record<string, number>, category?: string, imageUri?: string) => void;
   updateMenu: (id: string, name: string, price: number, recipe?: Record<string, number>, category?: string, imageUri?: string) => void;
@@ -127,14 +128,14 @@ interface ContextValue extends State {
 }
 const WarungContext = createContext<ContextValue | null>(null);
 const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-const defaultState: State = {
+const defaultState: WarungState = {
   menus: [],
   activeOrders: [],
   kitchenOrders: [],
   inventory: [], consignments: [], expenses: [], sales: [], savingsRules: [], savingsEntries: [], qrisImageUri: undefined,
 };
 export function WarungProvider({ children }: { children: ReactNode }) {
-  const [state, setState] = useState<State>(defaultState);
+  const [state, setState] = useState<WarungState>(defaultState);
   const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     let mounted = true;
@@ -143,7 +144,7 @@ export function WarungProvider({ children }: { children: ReactNode }) {
         if (!mounted) return;
         if (raw) {
           try {
-            const saved = JSON.parse(raw) as Partial<State>;
+            const saved = JSON.parse(raw) as Partial<WarungState>;
             const savedKitchenOrders = Array.isArray(saved.kitchenOrders) ? saved.kitchenOrders : [];
             const savedActiveOrders = Array.isArray(saved.activeOrders) ? saved.activeOrders : [];
             const normalizedActiveOrders = savedActiveOrders.map(order => ({
@@ -225,69 +226,17 @@ export function WarungProvider({ children }: { children: ReactNode }) {
          return restored ? { ...item, qty: item.qty + restored } : item;
        }),
      })),
-     addOrder: (tables, pax, items, note) => setState(s => {
-       const submittedItems = snapshotOrderItems(items, s.menus, s.consignments);
-       if (!hasStockForOrder(s.inventory, s.consignments, submittedItems)) return s;
-       const order = { id: makeId(), tables, pax, items: submittedItems, note, cooked: false, createdAt: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) };
-       return {
-         ...s,
-         activeOrders: [...s.activeOrders, order],
-         kitchenOrders: [...s.kitchenOrders, order],
-         inventory: consume(s.inventory, s.menus, submittedItems),
-         consignments: consumeConsignmentStock(s.consignments, submittedItems),
-       };
-     }),
+      addOrder: (tables, pax, items, note) => setState(s => submitOrder(
+        s,
+        { tables, pax, items, note },
+        makeId,
+        new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      )),
      updateOrderTables: (id, tables) => setState(s => {
        const update = (order: ActiveOrder) => order.id === id || order.parentOrderId === id ? { ...order, tables } : order;
        return { ...s, activeOrders: s.activeOrders.map(update), kitchenOrders: s.kitchenOrders.map(update) };
      }),
-     addItems: (id, items, note) => setState(s => {
-      const order = s.activeOrders.find(o => o.id === id);
-      if (!order) return s;
-       const submittedItems = snapshotOrderItems(items, s.menus, s.consignments);
-       if (!hasStockForOrder(s.inventory, s.consignments, submittedItems)) return s;
-       if (!order.cooked && !order.pendingItems?.length) {
-          const updated = { ...order, items: mergeOrderItems(order.items, submittedItems), note: note || order.note, cooked: false };
-          return {
-            ...s, activeOrders: s.activeOrders.map(o => o.id === id ? updated : o), kitchenOrders: [...s.kitchenOrders.filter(o => o.id !== id), updated],
-            inventory: consume(s.inventory, s.menus, submittedItems), consignments: consumeConsignmentStock(s.consignments, submittedItems),
-          };
-       }
-
-       const existingAdditional = s.kitchenOrders.find((kitchenOrder) => kitchenOrder.isAdditional && kitchenOrder.parentOrderId === id);
-       const updated = {
-         ...order,
-          pendingItems: mergeOrderItems(order.pendingItems || [], submittedItems),
-         note: note || order.note,
-         cooked: false,
-       };
-       const additionalTicket: ActiveOrder = existingAdditional
-         ? {
-           ...existingAdditional,
-            items: mergeOrderItems(existingAdditional.items, submittedItems),
-           tables: order.tables,
-           note: note || existingAdditional.note,
-         }
-         : {
-           ...order,
-           id: makeId(),
-            items: submittedItems,
-           pendingItems: undefined,
-           isAdditional: true,
-           parentOrderId: id,
-           cooked: false,
-           note: note || order.note,
-         };
-       return {
-         ...s,
-         activeOrders: s.activeOrders.map(o => o.id === id ? updated : o),
-         kitchenOrders: existingAdditional
-           ? s.kitchenOrders.map(o => o.id === existingAdditional.id ? additionalTicket : o)
-           : [...s.kitchenOrders, additionalTicket],
-          inventory: consume(s.inventory, s.menus, submittedItems),
-          consignments: consumeConsignmentStock(s.consignments, submittedItems),
-       };
-    }),
+      addItems: (id, items, note) => setState(s => appendOrderItems(s, id, items, note, makeId)),
      completeKitchen: id => setState(s => {
        const kitchenOrder = s.kitchenOrders.find((order) => order.id === id);
        if (!kitchenOrder) return s;
@@ -402,17 +351,7 @@ export function WarungProvider({ children }: { children: ReactNode }) {
           ],
         } : s;
       }),
-    cancelOrder: id => setState(s => {
-      const order = s.activeOrders.find(o => o.id === id);
-       if (!order || order.cooked) return s;
-       return {
-         ...s,
-         activeOrders: s.activeOrders.filter(o => o.id !== id),
-          kitchenOrders: s.kitchenOrders.filter(o => o.id !== id && o.parentOrderId !== id),
-          inventory: restore(s.inventory, s.menus, getOrderItems(order)),
-          consignments: restoreConsignmentStock(s.consignments, getOrderItems(order)),
-       };
-    }),
+    cancelOrder: id => setState(s => cancelActiveOrder(s, id)),
     consumeItems: items => setState(s => ({ ...s, inventory: consume(s.inventory, s.menus, items) })),
     restoreItems: items => setState(s => ({ ...s, inventory: restore(s.inventory, s.menus, items) })),
     addStock: (id, qty) => setState(s => ({ ...s, inventory: s.inventory.map(i => i.id === id ? { ...i, qty: i.qty + qty } : i) })),

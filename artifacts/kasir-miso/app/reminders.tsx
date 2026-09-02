@@ -7,53 +7,24 @@ import { useRouter } from 'expo-router';
 import { PrimaryButton, Screen, Surface } from '@/components/WarungUI';
 import { useColors } from '@/hooks/useColors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  addReminderToList,
+  deleteReminderFromList,
+  parseReminderTime,
+  readScheduledReminderIndex,
+  reminderSignature,
+  toggleReminderInList,
+  type Reminder,
+  type ScheduledReminderIndex,
+} from '@/domain/reminders';
 
-type Reminder = { id: string; title: string; time: string; completed: boolean };
 type ReminderTab = 'upcoming' | 'completed';
-type ScheduledReminder = { notificationId: string; signature: string };
-type ScheduledReminderIndex = Record<string, ScheduledReminder>;
 const STORAGE_KEY = 'warung-reminders-v1';
 const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v1';
 const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v2';
 
-function parseReminderTime(value: string) {
-  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-  return { hour, minute };
-}
-
-function reminderSignature(item: Reminder) {
-  return `${item.title}\u0000${item.time}`;
-}
-
 function isReminderNotification(notification: Notifications.NotificationRequest) {
   return typeof notification.content.data?.reminderId === 'string';
-}
-
-function readScheduledReminderIndex(raw: string | null): ScheduledReminderIndex {
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    if (!parsed || typeof parsed !== 'object') return {};
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([reminderId, value]) => {
-        if (
-          value
-          && typeof value === 'object'
-          && typeof (value as ScheduledReminder).notificationId === 'string'
-          && typeof (value as ScheduledReminder).signature === 'string'
-        ) {
-          return [[reminderId, value as ScheduledReminder]];
-        }
-        return [];
-      }),
-    );
-  } catch {
-    return {};
-  }
 }
 
 async function requestNotificationPermission() {
@@ -267,13 +238,11 @@ export default function RemindersScreen() {
       setNotice('Masukkan waktu dengan format 00:00 sampai 23:59.');
       return;
     }
-    const newReminder: Reminder = {
-      id: `${Date.now()}-${Math.random()}`,
-      title: title.trim(),
-      time: time.trim() || '08:00',
-      completed: false,
-    };
-    const nextReminders = [...reminders, newReminder];
+    const nextReminders = addReminderToList(
+      reminders,
+      { title, time },
+      `${Date.now()}-${Math.random()}`,
+    );
     setReminders(nextReminders);
     setNotice('Pengingat tersimpan. Menyiapkan notifikasi...');
     setTitle('');
@@ -342,11 +311,11 @@ export default function RemindersScreen() {
   };
 
   const toggleReminder = (id: string) => {
-    setReminders((items) => items.map((item) => item.id === id ? { ...item, completed: !item.completed } : item));
+    setReminders((items) => toggleReminderInList(items, id));
   };
 
   const deleteReminder = (id: string) => {
-    setReminders((items) => items.filter((item) => item.id !== id));
+    setReminders((items) => deleteReminderFromList(items, id));
   };
 
   return (

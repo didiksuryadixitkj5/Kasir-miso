@@ -1,11 +1,19 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ApiError } from '@workspace/api-client-react';
 import { GOOGLE_SESSION_TOKEN_KEY, useGoogleAccount } from '@/context/GoogleAccountContext';
 import { useWarung } from '@/context/WarungContext';
+import {
+  createStoredBackup,
+  hasRemoteRevisionConflict,
+  parseStoredBackup,
+  type StoredBackup,
+} from '@/utils/backupEnvelope';
 
 const LAST_BACKUP_KEY = 'warung-online-backup-last-v1';
 const RECOVERY_SNAPSHOT_KEY = 'warung-online-restore-recovery-v1';
 const RECOVERY_JOURNAL_KEY = 'warung-online-restore-journal-v1';
+const REMOTE_REVISION_KEY = 'warung-online-backup-remote-revision-v1';
 const EXCLUDED_BACKUP_KEYS = new Set([
   'warung-google-connection-v1',
   'warung-google-account-email-v1',
@@ -14,6 +22,7 @@ const EXCLUDED_BACKUP_KEYS = new Set([
   LAST_BACKUP_KEY,
   RECOVERY_SNAPSHOT_KEY,
   RECOVERY_JOURNAL_KEY,
+  REMOTE_REVISION_KEY,
 ]);
 
 type BackupStatus = 'idle' | 'backing-up' | 'restoring' | 'success' | 'error';
@@ -26,75 +35,51 @@ type OnlineBackupContextValue = {
   restoreLatest: () => Promise<string>;
 };
 
-type StoredBackup = {
-  format: 'kasir-miso-online-backup';
-  version: 1;
+type RemoteRevision = {
+  modifiedTime: string;
+  backupId: string;
   createdAt: string;
-  storage: Record<string, string>;
+  payloadChecksum: string | null;
 };
 
 const OnlineBackupContext = createContext<OnlineBackupContextValue | null>(null);
 
 const isBackupDataKey = (key: string) => key.startsWith('warung-') && !EXCLUDED_BACKUP_KEYS.has(key);
 
-const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
-  typeof value === 'object' && value !== null && !Array.isArray(value)
-);
-
-function parseBackup(raw: string): StoredBackup {
-  let backup: unknown;
-  try {
-    backup = JSON.parse(raw);
-  } catch {
-    throw new Error('Format backup Google Drive tidak dikenali.');
-  }
-
-  if (!isObjectRecord(backup)
-    || backup.format !== 'kasir-miso-online-backup'
-    || backup.version !== 1
-    || !isObjectRecord(backup.storage)) {
-    throw new Error('Format backup Google Drive tidak dikenali.');
-  }
-
-  const storage = backup.storage;
-  const state = storage['warung-state-v2'];
-  if (typeof state !== 'string') {
-    throw new Error('Backup Google Drive tidak memuat data warung yang valid.');
-  }
-
-  try {
-    if (!isObjectRecord(JSON.parse(state))) {
-      throw new Error();
-    }
-  } catch {
-    throw new Error('Data warung di backup Google Drive tidak valid.');
-  }
-
-  for (const [key, value] of Object.entries(storage)) {
-    if (!isBackupDataKey(key) || typeof value !== 'string') {
-      throw new Error('Isi backup Google Drive tidak valid.');
-    }
-  }
-
-  return {
-    format: 'kasir-miso-online-backup',
-    version: 1,
-    createdAt: typeof backup.createdAt === 'string' ? backup.createdAt : '',
-    storage: storage as Record<string, string>,
-  };
-}
-
 async function collectBackup(): Promise<StoredBackup> {
   const keys = (await AsyncStorage.getAllKeys()).filter(isBackupDataKey);
   const entries = await AsyncStorage.multiGet(keys);
-  return {
-    format: 'kasir-miso-online-backup',
-    version: 1,
-    createdAt: new Date().toISOString(),
-    storage: Object.fromEntries(
+  return createStoredBackup(
+    Object.fromEntries(
       entries.filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
     ),
+  );
+}
+
+function readRemoteRevision(raw: string | null): RemoteRevision | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<RemoteRevision>;
+    if (!parsed.modifiedTime || !parsed.backupId || !parsed.createdAt) return null;
+    return {
+      modifiedTime: parsed.modifiedTime,
+      backupId: parsed.backupId,
+      createdAt: parsed.createdAt,
+      payloadChecksum: typeof parsed.payloadChecksum === 'string' ? parsed.payloadChecksum : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function saveRemoteRevision(backup: StoredBackup, modifiedTime: string) {
+  const revision: RemoteRevision = {
+    modifiedTime,
+    backupId: backup.backupId,
+    createdAt: backup.createdAt,
+    payloadChecksum: backup.payloadChecksum ?? null,
   };
+  await AsyncStorage.setItem(REMOTE_REVISION_KEY, JSON.stringify(revision));
 }
 
 export function OnlineBackupProvider({ children }: { children: React.ReactNode }) {
@@ -147,8 +132,21 @@ export function OnlineBackupProvider({ children }: { children: React.ReactNode }
     setStatus('backing-up');
     setError('');
     try {
+      const knownRevision = readRemoteRevision(await AsyncStorage.getItem(REMOTE_REVISION_KEY));
+      let remote: Awaited<ReturnType<typeof downloadDriveBackup>> | null = null;
+      try {
+        remote = await downloadDriveBackup();
+      } catch (reason) {
+        if (!(reason instanceof ApiError && reason.status === 404)) throw reason;
+      }
+      if (hasRemoteRevisionConflict(remote?.modifiedTime ?? null, knownRevision?.modifiedTime ?? null)) {
+        throw new Error(
+          'Backup Google Drive lebih baru ditemukan dari perangkat lain. Pulihkan backup terbaru sebelum membuat perubahan baru.',
+        );
+      }
       const backup = await collectBackup();
-      await uploadDriveBackup(JSON.stringify(backup));
+      const uploaded = await uploadDriveBackup(JSON.stringify(backup), remote?.modifiedTime ?? null);
+      await saveRemoteRevision(backup, uploaded.modifiedTime);
       await AsyncStorage.setItem(LAST_BACKUP_KEY, backup.createdAt);
       setLastBackupAt(backup.createdAt);
       setStatus('success');
@@ -165,7 +163,7 @@ export function OnlineBackupProvider({ children }: { children: React.ReactNode }
         setTimeout(() => void runBackup().catch(() => undefined), 500);
       }
     }
-  }, [hasDriveAccess, uploadDriveBackup]);
+  }, [downloadDriveBackup, hasDriveAccess, uploadDriveBackup]);
 
   useEffect(() => {
     if (!hasDriveAccess || !warung.hydrated) {
@@ -201,7 +199,8 @@ export function OnlineBackupProvider({ children }: { children: React.ReactNode }
     setStatus('restoring');
     setError('');
     try {
-      const backup = parseBackup(await downloadDriveBackup());
+      const downloaded = await downloadDriveBackup();
+      const backup = await parseStoredBackup(downloaded.content, isBackupDataKey);
       const currentKeys = (await AsyncStorage.getAllKeys()).filter(isBackupDataKey);
       const originalEntries = await AsyncStorage.multiGet(currentKeys);
       const originalLastBackupAt = await AsyncStorage.getItem(LAST_BACKUP_KEY);
@@ -230,6 +229,7 @@ export function OnlineBackupProvider({ children }: { children: React.ReactNode }
         await AsyncStorage.multiSet(entries);
         if (staleKeys.length) await AsyncStorage.multiRemove(staleKeys);
         await AsyncStorage.setItem(LAST_BACKUP_KEY, backup.createdAt || recoveryCreatedAt);
+        if (downloaded.modifiedTime) await saveRemoteRevision(backup, downloaded.modifiedTime);
       } catch (restoreReason) {
         if (replacementStarted) {
           const affectedKeys = [...new Set([...currentKeys, ...replacementKeys])];

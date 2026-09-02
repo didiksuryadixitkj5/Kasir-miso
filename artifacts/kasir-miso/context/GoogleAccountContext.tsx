@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
 import {
@@ -17,6 +18,8 @@ import {
 WebBrowser.maybeCompleteAuthSession();
 
 export const GOOGLE_SESSION_TOKEN_KEY = 'warung-google-server-session-v1';
+const GOOGLE_SESSION_EXPIRY_KEY = 'warung-google-server-session-expiry-v1';
+const GOOGLE_DEVICE_ID_KEY = 'warung-google-device-id-v1';
 const LEGACY_GOOGLE_CONNECTION_KEY = 'warung-google-connection-v1';
 const GOOGLE_ACCOUNT_EMAIL_KEY = 'warung-google-account-email-v1';
 const GOOGLE_CLIENT_ID_FALLBACK = 'google-client-id-not-configured';
@@ -46,8 +49,8 @@ type GoogleAccountContextValue = {
   request: ReturnType<typeof Google.useAuthRequest>[0];
   promptAsync: ReturnType<typeof Google.useAuthRequest>[2];
   clientConfigured: boolean;
-  uploadDriveBackup: (content: string) => Promise<void>;
-  downloadDriveBackup: () => Promise<string>;
+  uploadDriveBackup: (content: string, expectedModifiedTime: string | null) => Promise<{ modifiedTime: string }>;
+  downloadDriveBackup: () => Promise<{ content: string; modifiedTime: string | null }>;
   logout: () => Promise<void>;
 };
 
@@ -55,10 +58,40 @@ const GoogleAccountContext = createContext<GoogleAccountContextValue | null>(nul
 
 const reconnectMessage = 'Koneksi Google Drive berakhir. Hubungkan ulang akun Google untuk melanjutkan backup.';
 
+async function getProtectedItem(key: string) {
+  if (Platform.OS === 'web') {
+    return typeof window === 'undefined' ? null : window.sessionStorage.getItem(key);
+  }
+  return SecureStore.getItemAsync(key);
+}
+
+async function setProtectedItem(key: string, value: string) {
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.sessionStorage.setItem(key, value);
+    return;
+  }
+  await SecureStore.setItemAsync(key, value, {
+    keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+  });
+}
+
+async function removeProtectedItem(key: string) {
+  if (Platform.OS === 'web') {
+    if (typeof window !== 'undefined') window.sessionStorage.removeItem(key);
+    return;
+  }
+  await SecureStore.deleteItemAsync(key);
+}
+
+function createDeviceId() {
+  return `device-${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function GoogleAccountProvider({ children }: { children: React.ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [email, setEmail] = useState('');
   const [sessionToken, setSessionToken] = useState<string | null>(null);
+  const [deviceId, setDeviceId] = useState('');
   const [authError, setAuthError] = useState('');
   const [hydrated, setHydrated] = useState(false);
   const authResponseHandled = useRef(false);
@@ -77,10 +110,14 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
   });
 
   const clearLocalSession = useCallback(async (message = '') => {
-    await AsyncStorage.multiRemove([
-      GOOGLE_SESSION_TOKEN_KEY,
-      GOOGLE_ACCOUNT_EMAIL_KEY,
-      LEGACY_GOOGLE_CONNECTION_KEY,
+    await Promise.all([
+      removeProtectedItem(GOOGLE_SESSION_TOKEN_KEY),
+      removeProtectedItem(GOOGLE_SESSION_EXPIRY_KEY),
+      AsyncStorage.multiRemove([
+        GOOGLE_SESSION_TOKEN_KEY,
+        GOOGLE_ACCOUNT_EMAIL_KEY,
+        LEGACY_GOOGLE_CONNECTION_KEY,
+      ]),
     ]);
     setSessionToken(null);
     setIsConnected(false);
@@ -90,19 +127,28 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
 
   useEffect(() => {
     Promise.all([
-      AsyncStorage.getItem(GOOGLE_SESSION_TOKEN_KEY),
+      getProtectedItem(GOOGLE_SESSION_TOKEN_KEY),
+      getProtectedItem(GOOGLE_SESSION_EXPIRY_KEY),
+      getProtectedItem(GOOGLE_DEVICE_ID_KEY),
       AsyncStorage.getItem(GOOGLE_ACCOUNT_EMAIL_KEY),
+      AsyncStorage.removeItem(GOOGLE_SESSION_TOKEN_KEY),
       AsyncStorage.removeItem(LEGACY_GOOGLE_CONNECTION_KEY),
     ])
-      .then(([savedToken, savedEmail]) => {
-        if (!authResponseHandled.current && savedToken) {
+      .then(async ([savedToken, savedExpiry, savedDeviceId, savedEmail]) => {
+        const activeDeviceId = savedDeviceId || createDeviceId();
+        if (!savedDeviceId) await setProtectedItem(GOOGLE_DEVICE_ID_KEY, activeDeviceId);
+        setDeviceId(activeDeviceId);
+        const isExpired = !savedExpiry || Date.parse(savedExpiry) <= Date.now();
+        if (!authResponseHandled.current && savedToken && !isExpired) {
           setSessionToken(savedToken);
           setEmail(savedEmail ?? '');
           setIsConnected(true);
+        } else if (savedToken) {
+          await clearLocalSession(reconnectMessage);
         }
       })
       .finally(() => setHydrated(true));
-  }, []);
+  }, [clearLocalSession]);
 
   useEffect(() => {
     setAuthTokenGetter(() => sessionToken);
@@ -110,10 +156,13 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
   }, [sessionToken]);
 
   useEffect(() => {
-    if (!hydrated || !sessionToken) return;
+    if (!hydrated || !sessionToken || !deviceId) return;
     let mounted = true;
     void getGoogleConnection({
-      headers: { Authorization: `Bearer ${sessionToken}` },
+      headers: {
+        Authorization: `Bearer ${sessionToken}`,
+        'X-Device-ID': deviceId,
+      },
     })
       .then(async (connection) => {
         if (!mounted) return;
@@ -133,7 +182,7 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
     return () => {
       mounted = false;
     };
-  }, [clearLocalSession, hydrated, sessionToken]);
+  }, [clearLocalSession, deviceId, hydrated, sessionToken]);
 
   useEffect(() => {
     if (!response) return;
@@ -148,7 +197,7 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
 
     const code = response.params.code;
     const codeVerifier = request?.codeVerifier;
-    if (!code || !codeVerifier || !request) {
+    if (!code || !codeVerifier || !request || !deviceId) {
       setAuthError('Google tidak mengembalikan kode aman untuk menghubungkan Drive. Coba lagi.');
       return;
     }
@@ -161,11 +210,18 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
       codeVerifier,
       redirectUri: request.redirectUri,
       clientId: request.clientId,
+      deviceId,
+    }, {
+      headers: {
+        ...(sessionToken ? { Authorization: `Bearer ${sessionToken}` } : {}),
+        'X-Device-ID': deviceId,
+      },
     })
       .then(async (connection) => {
-        await AsyncStorage.multiSet([
-          [GOOGLE_SESSION_TOKEN_KEY, connection.sessionToken],
-          [GOOGLE_ACCOUNT_EMAIL_KEY, connection.email],
+        await Promise.all([
+          setProtectedItem(GOOGLE_SESSION_TOKEN_KEY, connection.sessionToken),
+          setProtectedItem(GOOGLE_SESSION_EXPIRY_KEY, connection.expiresAt),
+          AsyncStorage.setItem(GOOGLE_ACCOUNT_EMAIL_KEY, connection.email),
         ]);
         if (!mounted) return;
         setSessionToken(connection.sessionToken);
@@ -185,7 +241,7 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
     return () => {
       mounted = false;
     };
-  }, [request, response]);
+  }, [deviceId, request, response, sessionToken]);
 
   const handleDriveError = useCallback(async (reason: unknown): Promise<never> => {
     if (reason instanceof ApiError && reason.status === 401) {
@@ -195,42 +251,60 @@ export function GoogleAccountProvider({ children }: { children: React.ReactNode 
     throw reason;
   }, [clearLocalSession]);
 
-  const uploadDriveBackup = useCallback(async (content: string) => {
-    if (!sessionToken) throw new Error('Hubungkan akun Google Drive terlebih dahulu.');
+  const uploadDriveBackup = useCallback(async (content: string, expectedModifiedTime: string | null) => {
+    if (!sessionToken || !deviceId) throw new Error('Hubungkan akun Google Drive terlebih dahulu.');
     try {
-      await uploadGoogleDriveBackup(
-        { content },
-        { headers: { Authorization: `Bearer ${sessionToken}` } },
+      const uploaded = await uploadGoogleDriveBackup(
+        { content, expectedModifiedTime },
+        {
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+            'X-Device-ID': deviceId,
+          },
+        },
       );
+      return { modifiedTime: uploaded.modifiedTime };
     } catch (reason) {
       return handleDriveError(reason);
     }
-  }, [handleDriveError, sessionToken]);
+  }, [deviceId, handleDriveError, sessionToken]);
 
   const downloadDriveBackup = useCallback(async () => {
-    if (!sessionToken) throw new Error('Hubungkan akun Google Drive terlebih dahulu.');
+    if (!sessionToken || !deviceId) throw new Error('Hubungkan akun Google Drive terlebih dahulu.');
     try {
       const backup = await downloadGoogleDriveBackup({
-        headers: { Authorization: `Bearer ${sessionToken}` },
+        headers: {
+          Authorization: `Bearer ${sessionToken}`,
+          'X-Device-ID': deviceId,
+        },
       });
-      return backup.content;
+      return backup;
     } catch (reason) {
       return handleDriveError(reason);
     }
-  }, [handleDriveError, sessionToken]);
+  }, [deviceId, handleDriveError, sessionToken]);
 
   const logout = useCallback(async () => {
-    if (sessionToken) {
+    if (sessionToken && deviceId) {
       try {
         await disconnectGoogleAccount({
-          headers: { Authorization: `Bearer ${sessionToken}` },
+          headers: {
+            Authorization: `Bearer ${sessionToken}`,
+            'X-Device-ID': deviceId,
+          },
         });
-      } catch {
-        // Local logout still succeeds if the server is temporarily unavailable.
+      } catch (reason) {
+        if (reason instanceof ApiError && reason.status === 401) {
+          await clearLocalSession();
+          return;
+        }
+        const message = 'Logout belum selesai karena server tidak dapat mencabut sesi. Coba lagi saat koneksi stabil.';
+        setAuthError(message);
+        throw new Error(message);
       }
     }
     await clearLocalSession();
-  }, [clearLocalSession, sessionToken]);
+  }, [clearLocalSession, deviceId, sessionToken]);
 
   const value = useMemo<GoogleAccountContextValue>(() => ({
     isConnected,

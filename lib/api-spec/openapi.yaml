@@ -127,6 +127,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: A newer backup already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -151,11 +157,15 @@ components:
         clientId:
           type: string
           minLength: 1
+        deviceId:
+          type: string
+          minLength: 16
       required:
         - code
         - codeVerifier
         - redirectUri
         - clientId
+        - deviceId
     GoogleConnection:
       type: object
       properties:
@@ -163,17 +173,25 @@ components:
           type: string
         email:
           type: string
+        expiresAt:
+          type: string
       required:
         - sessionToken
         - email
+        - expiresAt
     GoogleDriveBackupInput:
       type: object
       properties:
         content:
           type: string
           minLength: 1
+        expectedModifiedTime:
+          type:
+            - string
+            - "null"
       required:
         - content
+        - expectedModifiedTime
     GoogleDriveBackup:
       type: object
       properties:
@@ -189,8 +207,11 @@ components:
       properties:
         savedAt:
           type: string
+        modifiedTime:
+          type: string
       required:
         - savedAt
+        - modifiedTime
     ErrorResponse:
       type: object
       properties:

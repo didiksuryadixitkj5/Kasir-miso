@@ -36,6 +36,10 @@ export class GoogleDriveNotFoundError extends Error {
   readonly code = "GOOGLE_DRIVE_NOT_FOUND";
 }
 
+export class GoogleDriveConflictError extends Error {
+  readonly code = "GOOGLE_DRIVE_CONFLICT";
+}
+
 export class GoogleConfigurationError extends Error {
   readonly code = "GOOGLE_CONFIGURATION_ERROR";
 }
@@ -86,6 +90,10 @@ export function createSessionToken(): string {
 
 export function hashSessionToken(sessionToken: string): string {
   return createHash("sha256").update(sessionToken).digest("hex");
+}
+
+export function hashDeviceId(deviceId: string): string {
+  return createHash("sha256").update(deviceId).digest("hex");
 }
 
 function getConfiguredClientIds(): Set<string> {
@@ -254,8 +262,18 @@ export async function findBackupFile(connection: GoogleDriveConnection): Promise
   return result.files?.[0] ?? null;
 }
 
-export async function uploadBackup(connection: GoogleDriveConnection, content: string): Promise<void> {
+export async function uploadBackup(
+  connection: GoogleDriveConnection,
+  content: string,
+  expectedModifiedTime: string | null,
+): Promise<{ modifiedTime: string }> {
   const existing = await findBackupFile(connection);
+  const currentModifiedTime = existing?.modifiedTime ?? null;
+  if (currentModifiedTime !== expectedModifiedTime) {
+    throw new GoogleDriveConflictError(
+      "Backup Google Drive lebih baru ditemukan. Pulihkan backup terbaru sebelum mengunggah perubahan perangkat ini.",
+    );
+  }
   let fileId = existing?.id;
 
   if (!fileId) {
@@ -277,7 +295,7 @@ export async function uploadBackup(connection: GoogleDriveConnection, content: s
 
   const uploadResponse = await driveFetch(
     connection,
-    `${GOOGLE_DRIVE_UPLOAD_ENDPOINT}/files/${encodeURIComponent(fileId)}?uploadType=media`,
+    `${GOOGLE_DRIVE_UPLOAD_ENDPOINT}/files/${encodeURIComponent(fileId)}?uploadType=media&fields=modifiedTime`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json;charset=utf-8" },
@@ -285,6 +303,13 @@ export async function uploadBackup(connection: GoogleDriveConnection, content: s
     },
   );
   if (!uploadResponse.ok) throw new Error(await parseDriveError(uploadResponse));
+  const uploaded = (await uploadResponse.json().catch(() => ({}))) as { modifiedTime?: string };
+  if (!uploaded.modifiedTime) {
+    const refreshed = await findBackupFile(connection);
+    if (!refreshed?.modifiedTime) throw new Error("Google Drive did not return the saved backup revision.");
+    return { modifiedTime: refreshed.modifiedTime };
+  }
+  return { modifiedTime: uploaded.modifiedTime };
 }
 
 export async function downloadBackup(
@@ -306,6 +331,17 @@ export async function deleteConnection(connection: GoogleDriveConnection): Promi
   await db
     .delete(googleDriveConnectionsTable)
     .where(eq(googleDriveConnectionsTable.id, connection.id));
+}
+
+export async function deleteConnectionsForGoogleSubject(googleSubject: string): Promise<void> {
+  const connections = await db
+    .select()
+    .from(googleDriveConnectionsTable)
+    .where(eq(googleDriveConnectionsTable.googleSubject, googleSubject));
+  connections.forEach((connection) => accessTokenCache.delete(connection.id));
+  await db
+    .delete(googleDriveConnectionsTable)
+    .where(eq(googleDriveConnectionsTable.googleSubject, googleSubject));
 }
 
 export function encryptGoogleRefreshToken(refreshToken: string): string {

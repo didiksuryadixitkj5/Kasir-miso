@@ -18,16 +18,21 @@ export interface GoogleConnectionInput {
   redirectUri: string;
   /** @minLength 1 */
   clientId: string;
+  /** @minLength 16 */
+  deviceId: string;
 }
 
 export interface GoogleConnection {
   sessionToken: string;
   email: string;
+  expiresAt: string;
 }
 
 export interface GoogleDriveBackupInput {
   /** @minLength 1 */
   content: string;
+  /** @nullable */
+  expectedModifiedTime: string | null;
 }
 
 export interface GoogleDriveBackup {
@@ -38,6 +43,7 @@ export interface GoogleDriveBackup {
 
 export interface GoogleDriveBackupStatus {
   savedAt: string;
+  modifiedTime: string;
 }
 
 export interface ErrorResponse {

@@ -13,17 +13,41 @@ import { db, googleDriveConnectionsTable, type GoogleDriveConnection } from "@wo
 import {
   createSessionToken,
   deleteConnection,
+  deleteConnectionsForGoogleSubject,
   downloadBackup,
   encryptGoogleRefreshToken,
   exchangeGoogleCode,
   GoogleAuthorizationError,
   GoogleConfigurationError,
+  GoogleDriveConflictError,
   GoogleDriveNotFoundError,
   hashSessionToken,
+  hashDeviceId,
   uploadBackup,
 } from "../lib/google-drive";
 
 const router: IRouter = Router();
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const SESSION_IDLE_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1000;
+const LAST_USED_WRITE_INTERVAL_MS = 15 * 60 * 1000;
+const backupUploadQueues = new Map<string, Promise<void>>();
+
+async function serializeBackupUpload<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = backupUploadQueues.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  backupUploadQueues.set(key, queued);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (backupUploadQueues.get(key) === queued) backupUploadQueues.delete(key);
+  }
+}
 
 function getBearerToken(req: Request): string | null {
   const value = req.get("authorization");
@@ -34,13 +58,30 @@ function getBearerToken(req: Request): string | null {
 
 async function getConnection(req: Request): Promise<{ connection: GoogleDriveConnection; token: string } | null> {
   const token = getBearerToken(req);
-  if (!token) return null;
+  const deviceId = req.get("x-device-id")?.trim();
+  if (!token || !deviceId) return null;
   const [connection] = await db
     .select()
     .from(googleDriveConnectionsTable)
     .where(eq(googleDriveConnectionsTable.sessionTokenHash, hashSessionToken(token)))
     .limit(1);
-  return connection ? { connection, token } : null;
+  if (!connection) return null;
+  if (!connection.deviceIdHash || connection.deviceIdHash !== hashDeviceId(deviceId)) return null;
+  if (!connection.sessionExpiresAt
+    || connection.sessionExpiresAt.getTime() <= Date.now()
+    || connection.lastUsedAt.getTime() + SESSION_IDLE_TIMEOUT_MS <= Date.now()) {
+    await deleteConnection(connection);
+    return null;
+  }
+  if (connection.lastUsedAt.getTime() + LAST_USED_WRITE_INTERVAL_MS <= Date.now()) {
+    const now = new Date();
+    await db
+      .update(googleDriveConnectionsTable)
+      .set({ lastUsedAt: now, updatedAt: now })
+      .where(eq(googleDriveConnectionsTable.id, connection.id));
+    connection.lastUsedAt = now;
+  }
+  return { connection, token };
 }
 
 function sendUnauthorized(res: Parameters<Parameters<typeof router.get>[1]>[1]): void {
@@ -59,6 +100,10 @@ function sendGoogleError(
   }
   if (error instanceof GoogleDriveNotFoundError) {
     res.status(404).json({ error: error.message });
+    return;
+  }
+  if (error instanceof GoogleDriveConflictError) {
+    res.status(409).json({ error: error.message });
     return;
   }
   if (error instanceof GoogleConfigurationError) {
@@ -94,7 +139,9 @@ router.post("/google/connection", async (req, res): Promise<void> => {
     const exchanged = await exchangeGoogleCode(parsed.data);
     const refreshToken = exchanged.refreshToken
       ? encryptGoogleRefreshToken(exchanged.refreshToken)
-      : current?.connection.encryptedRefreshToken;
+      : current?.connection.googleSubject === exchanged.googleSubject
+        ? current.connection.encryptedRefreshToken
+        : undefined;
 
     if (!refreshToken) {
       res.status(400).json({
@@ -103,32 +150,27 @@ router.post("/google/connection", async (req, res): Promise<void> => {
       return;
     }
 
-    const sessionToken = current?.token ?? createSessionToken();
+    const sessionToken = createSessionToken();
     const sessionTokenHash = hashSessionToken(sessionToken);
-    if (current) {
-      await db
-        .update(googleDriveConnectionsTable)
-        .set({
-          googleSubject: exchanged.googleSubject,
-          email: exchanged.email,
-          googleClientId: parsed.data.clientId,
-          encryptedRefreshToken: refreshToken,
-          updatedAt: new Date(),
-        })
-        .where(eq(googleDriveConnectionsTable.id, current.connection.id));
-    } else {
-      await db.insert(googleDriveConnectionsTable).values({
-        sessionTokenHash,
-        googleSubject: exchanged.googleSubject,
-        email: exchanged.email,
-        googleClientId: parsed.data.clientId,
-        encryptedRefreshToken: refreshToken,
-      });
-    }
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + SESSION_MAX_AGE_MS);
+    if (current) await deleteConnection(current.connection);
+    await deleteConnectionsForGoogleSubject(exchanged.googleSubject);
+    await db.insert(googleDriveConnectionsTable).values({
+      sessionTokenHash,
+      deviceIdHash: hashDeviceId(parsed.data.deviceId),
+      sessionExpiresAt: expiresAt,
+      lastUsedAt: now,
+      googleSubject: exchanged.googleSubject,
+      email: exchanged.email,
+      googleClientId: parsed.data.clientId,
+      encryptedRefreshToken: refreshToken,
+    });
 
     res.json(ConnectGoogleAccountResponse.parse({
       sessionToken,
       email: exchanged.email,
+      expiresAt: expiresAt.toISOString(),
     }));
   } catch (error) {
     sendGoogleError(req, res, error);
@@ -141,7 +183,7 @@ router.delete("/google/connection", async (req, res): Promise<void> => {
     sendUnauthorized(res);
     return;
   }
-  await deleteConnection(authenticated.connection);
+  await deleteConnectionsForGoogleSubject(authenticated.connection.googleSubject);
   res.status(204).send(DisconnectGoogleAccountResponse.parse(undefined));
 });
 
@@ -171,8 +213,18 @@ router.post("/google/drive/backup", async (req, res): Promise<void> => {
     return;
   }
   try {
-    await uploadBackup(authenticated.connection, parsed.data.content);
-    res.json(UploadGoogleDriveBackupResponse.parse({ savedAt: new Date().toISOString() }));
+    const uploaded = await serializeBackupUpload(
+      authenticated.connection.googleSubject,
+      () => uploadBackup(
+        authenticated.connection,
+        parsed.data.content,
+        parsed.data.expectedModifiedTime,
+      ),
+    );
+    res.json(UploadGoogleDriveBackupResponse.parse({
+      savedAt: new Date().toISOString(),
+      modifiedTime: uploaded.modifiedTime,
+    }));
   } catch (error) {
     sendGoogleError(req, res, error);
   }

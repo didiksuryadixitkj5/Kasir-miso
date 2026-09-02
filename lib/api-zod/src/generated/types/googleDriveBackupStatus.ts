@@ -8,4 +8,5 @@
 
 export interface GoogleDriveBackupStatus {
   savedAt: string;
+  modifiedTime: string;
 }

@@ -1,3 +1,4 @@
 - [Expo project imports](expo-imports.md) — align native module versions with the workspace Expo SDK before relying on Metro startup.
 - [Google OAuth callback handling](google-oauth-callback.md) — keep AuthSession mounted at app root because callbacks can return to a different route.
 - [Web confirmation for native alerts](web-confirmation-for-native-alert.md) — use an explicit web confirmation branch for destructive actions; native Alert is not reliable in web preview.
+- [Workspace package installation](workspace-package-installation.md) — the package installer may not express pnpm workspace filters; verify scoped fallback installs in the lockfile.

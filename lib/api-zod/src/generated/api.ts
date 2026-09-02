@@ -22,7 +22,8 @@ export const HealthCheckResponse = zod.object({
  */
 export const GetGoogleConnectionResponse = zod.object({
   "sessionToken": zod.string(),
-  "email": zod.string()
+  "email": zod.string(),
+  "expiresAt": zod.string()
 })
 
 
@@ -34,18 +35,22 @@ export const connectGoogleAccountBodyCodeVerifierMin = 43;
 
 
 
+export const connectGoogleAccountBodyDeviceIdMin = 16;
+
 
 
 export const ConnectGoogleAccountBody = zod.object({
   "code": zod.string().min(1),
   "codeVerifier": zod.string().min(connectGoogleAccountBodyCodeVerifierMin),
   "redirectUri": zod.string().min(1),
-  "clientId": zod.string().min(1)
+  "clientId": zod.string().min(1),
+  "deviceId": zod.string().min(connectGoogleAccountBodyDeviceIdMin)
 })
 
 export const ConnectGoogleAccountResponse = zod.object({
   "sessionToken": zod.string(),
-  "email": zod.string()
+  "email": zod.string(),
+  "expiresAt": zod.string()
 })
 
 
@@ -71,10 +76,11 @@ export const DownloadGoogleDriveBackupResponse = zod.object({
 
 
 export const UploadGoogleDriveBackupBody = zod.object({
-  "content": zod.string().min(1)
+  "content": zod.string().min(1),
+  "expectedModifiedTime": zod.string().nullable()
 })
 
 export const UploadGoogleDriveBackupResponse = zod.object({
-  "savedAt": zod.string()
+  "savedAt": zod.string(),
+  "modifiedTime": zod.string()
 })
-

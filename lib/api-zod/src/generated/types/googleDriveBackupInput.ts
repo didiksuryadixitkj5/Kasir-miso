@@ -9,4 +9,6 @@
 export interface GoogleDriveBackupInput {
   /** @minLength 1 */
   content: string;
+  /** @nullable */
+  expectedModifiedTime: string | null;
 }

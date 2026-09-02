@@ -9,4 +9,5 @@
 export interface GoogleConnection {
   sessionToken: string;
   email: string;
+  expiresAt: string;
 }
