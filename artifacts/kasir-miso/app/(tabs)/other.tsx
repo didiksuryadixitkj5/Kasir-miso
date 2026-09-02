@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
 import * as SecureStore from 'expo-secure-store';
-import { Alert, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { Alert, BackHandler, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { PageHeader, Screen, Surface } from '@/components/WarungUI';
@@ -14,6 +14,17 @@ const ONLINE_BACKUP_KEY = 'warung-online-backup-pending-v1';
 const GOOGLE_CONNECTION_KEY = 'warung-google-connection-v1';
 const GOOGLE_ACCESS_TOKEN_KEY = 'warung-google-drive-access-token-v1';
 const GOOGLE_ACCOUNT_EMAIL_KEY = 'warung-google-account-email-v1';
+const LOCAL_ACCOUNT_KEYS = [
+  'warung-state-v2',
+  'warung-reminders-v1',
+  'warung-staff-v1',
+  'warung-business-profile-v1',
+  'warung-business-card-v1',
+  OFFLINE_BACKUP_KEY,
+  ONLINE_BACKUP_KEY,
+  GOOGLE_CONNECTION_KEY,
+  GOOGLE_ACCOUNT_EMAIL_KEY,
+];
 const GOOGLE_CLIENT_ID_FALLBACK = 'google-client-id-not-configured';
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
 const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
@@ -278,25 +289,48 @@ export default function OtherScreen() {
   };
 
   const handleLogout = () => {
-    if (!isAccountConnected) {
-      setNotice('Belum ada akun Google yang terhubung.');
+    Alert.alert('Hapus akun saya?', 'Semua data usaha di perangkat ini, termasuk pesanan, stok, profil, staf, pengingat, dan koneksi Google, akan dihapus permanen. File backup yang sudah terunggah ke Google Drive tidak ikut dihapus.', [
+      { text: 'Batal', style: 'cancel' },
+      {
+        text: 'Hapus akun',
+        style: 'destructive',
+        onPress: () => void deleteAccount(),
+      },
+    ]);
+  };
+
+  const deleteAccount = async () => {
+    try {
+      await Promise.all([
+        AsyncStorage.multiRemove(LOCAL_ACCOUNT_KEYS),
+        SecureStore.deleteItemAsync(GOOGLE_ACCESS_TOKEN_KEY),
+      ]);
+      warung.resetData();
+      setIsAccountConnected(false);
+      setAccountEmail('');
+      setAccountPickerVisible(false);
+      setNotice('Akun dan semua data lokal sudah dihapus dari perangkat ini.');
+    } catch {
+      setNotice('Akun belum dapat dihapus sepenuhnya. Coba lagi.');
+    }
+  };
+
+  const handleCloseApp = () => {
+    if (Platform.OS === 'android') {
+      Alert.alert('Tutup aplikasi?', 'Aplikasi akan ditutup dari perangkat ini.', [
+        { text: 'Batal', style: 'cancel' },
+        { text: 'Tutup', style: 'destructive', onPress: () => BackHandler.exitApp() },
+      ]);
       return;
     }
 
-    Alert.alert('Keluar dari akun?', 'Akun Google akan diputuskan dari Kasir Miso.', [
-      { text: 'Batal', style: 'cancel' },
-      {
-        text: 'Keluar',
-        style: 'destructive',
-        onPress: () => {
-          void SecureStore.deleteItemAsync(GOOGLE_ACCESS_TOKEN_KEY);
-          void AsyncStorage.removeItem(GOOGLE_ACCOUNT_EMAIL_KEY);
-          setIsAccountConnected(false);
-          setAccountEmail('');
-          setNotice('Akun Google sudah dikeluarkan dari perangkat ini.');
-        },
-      },
-    ]);
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined') window.close();
+      setNotice('Tab aplikasi tidak dapat ditutup otomatis dari browser. Silakan tutup tab ini.');
+      return;
+    }
+
+    setNotice('Di iPhone, aplikasi perlu ditutup melalui pengalih aplikasi.');
   };
 
   return (
@@ -337,6 +371,14 @@ export default function OtherScreen() {
           detail={isAccountConnected ? (accountEmail || 'Google Drive terhubung') : 'Hubungkan akun Google'}
           testID="google-login-button"
           onPress={() => setAccountPickerVisible(true)}
+        />
+        <View style={[s.rowDivider, { backgroundColor: c.border }]} />
+        <MenuRow
+          icon="person-remove-outline"
+          label="Hapus akun saya"
+          detail="Hapus semua data usaha dari perangkat"
+          testID="delete-account-button"
+          onPress={handleLogout}
         />
         <View style={[s.rowDivider, { backgroundColor: c.border }]} />
         <MenuRow
@@ -413,10 +455,11 @@ export default function OtherScreen() {
         />
         <View style={[s.rowDivider, { backgroundColor: c.border }]} />
         <MenuRow
-          icon="log-out-outline"
-          label="Keluar"
-          testID="logout-button"
-          onPress={handleLogout}
+          icon="power-outline"
+          label="Tutup aplikasi"
+          detail="Keluar dari aplikasi ini"
+          testID="close-app-button"
+          onPress={handleCloseApp}
         />
       </Surface>
 
