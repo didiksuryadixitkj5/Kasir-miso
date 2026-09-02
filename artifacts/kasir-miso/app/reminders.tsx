@@ -10,9 +10,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   addReminderToList,
   deleteReminderFromList,
+  localDate,
+  normalizeReminderList,
+  parseReminderDate,
   parseReminderTime,
   readScheduledReminderIndex,
+  reminderDateTime,
   reminderSignature,
+  sortRemindersBySchedule,
   toggleReminderInList,
   type Reminder,
   type ScheduledReminderIndex,
@@ -20,12 +25,37 @@ import {
 
 type ReminderTab = 'upcoming' | 'completed';
 const STORAGE_KEY = 'warung-reminders-v1';
-const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v2';
+const NOTIFICATION_IDS_STORAGE_KEY = 'warung-reminder-notification-ids-v3';
 const ANDROID_NOTIFICATION_CHANNEL = 'reminders-v3';
 const NOTIFICATION_SOUND = 'kasir-miso-notification.wav';
 
 function isReminderNotification(notification: Notifications.NotificationRequest) {
   return typeof notification.content.data?.reminderId === 'string';
+}
+
+function formatReminderDate(value: string) {
+  const parsed = parseReminderDate(value);
+  if (!parsed) return value;
+  return new Date(parsed.year, parsed.month - 1, parsed.day).toLocaleDateString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function getRelativeDate(days: number) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return localDate(date);
+}
+
+function getDefaultReminderSchedule() {
+  const date = new Date(Date.now() + 5 * 60 * 1000);
+  return {
+    date: localDate(date),
+    time: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
+  };
 }
 
 async function requestNotificationPermission() {
@@ -54,10 +84,12 @@ export default function RemindersScreen() {
   const c = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const initialSchedule = useRef(getDefaultReminderSchedule()).current;
   const [activeTab, setActiveTab] = useState<ReminderTab>('upcoming');
   const [composerOpen, setComposerOpen] = useState(false);
   const [title, setTitle] = useState('');
-  const [time, setTime] = useState('08:00');
+  const [date, setDate] = useState(initialSchedule.date);
+  const [time, setTime] = useState(initialSchedule.time);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [hydrated, setHydrated] = useState(false);
   const [notice, setNotice] = useState('');
@@ -70,8 +102,7 @@ export default function RemindersScreen() {
       .then((raw) => {
         if (!raw) return;
         try {
-          const saved = JSON.parse(raw) as Reminder[];
-          if (Array.isArray(saved)) setReminders(saved);
+          setReminders(normalizeReminderList(JSON.parse(raw)));
         } catch {
           setReminders([]);
         }
@@ -85,8 +116,12 @@ export default function RemindersScreen() {
 
   const syncNativeNotifications = useCallback(async (items: Reminder[]) => {
     if (Platform.OS === 'web') return { activeCount: 0, expectedCount: 0 };
-    const desiredItems = items.filter((item) => !item.completed && parseReminderTime(item.time));
-    const desiredIds = new Set(desiredItems.map((item) => item.id));
+    const desiredIds = new Set(items.filter((item) => !item.completed).map((item) => item.id));
+    const desiredItems = items.filter((item) => (
+      !item.completed
+      && parseReminderTime(item.time)
+      && (reminderDateTime(item.date, item.time)?.getTime() ?? 0) > Date.now()
+    ));
     const permission = await Notifications.getPermissionsAsync();
     if (!permission.granted) {
       // Removals must still be cleaned up when notification permission is later revoked.
@@ -155,9 +190,11 @@ export default function RemindersScreen() {
             priority: Notifications.AndroidNotificationPriority.MAX,
             data: { reminderId: item.id },
           },
-          trigger: Platform.OS === 'android'
-            ? { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed, channelId: ANDROID_NOTIFICATION_CHANNEL }
-            : { type: Notifications.SchedulableTriggerInputTypes.DAILY, ...parsed },
+          trigger: {
+            type: Notifications.SchedulableTriggerInputTypes.DATE,
+            date: reminderDateTime(item.date, item.time) as Date,
+            channelId: ANDROID_NOTIFICATION_CHANNEL,
+          },
         });
         nextIndex[item.id] = { notificationId, signature };
         if (previous?.notificationId) replacedIds.add(previous.notificationId);
@@ -179,7 +216,7 @@ export default function RemindersScreen() {
       .forEach((notification) => {
         const reminderId = notification.content.data?.reminderId as string;
         const current = nextIndex[reminderId];
-        if (!desiredIds.has(reminderId) || (current && current.notificationId !== notification.identifier)) {
+        if (!desiredIds.has(reminderId) || !current || current.notificationId !== notification.identifier) {
           idsToCancel.add(notification.identifier);
         }
       });
@@ -201,13 +238,13 @@ export default function RemindersScreen() {
       .then(async () => {
         const { activeCount, expectedCount } = await syncNativeNotifications(snapshot);
         if (Platform.OS !== 'web' && expectedCount > 0 && activeCount !== expectedCount) {
-          setNotice('Sebagian pengingat belum berhasil dijadwalkan. Aktifkan izin Alarm & pengingat di pengaturan perangkat.');
+          setNotice('Sebagian pengingat belum berhasil dijadwalkan. Pastikan izin notifikasi aktif dan aplikasi tidak dibatasi baterai.');
         } else if (Platform.OS !== 'web' && expectedCount > 0) {
-          setNotice('Pengingat tersimpan dan notifikasi aktif setiap hari.');
+          setNotice('Pengingat tersimpan dan notifikasi aktif sesuai tanggal dan jam.');
         }
       })
       .catch(() => {
-        setNotice('Pengingat tersimpan, tetapi alarm perangkat belum dapat dijadwalkan. Aktifkan izin Alarm & pengingat di pengaturan perangkat.');
+        setNotice('Pengingat tersimpan, tetapi notifikasi belum dapat dijadwalkan. Pastikan izin notifikasi aktif dan aplikasi tidak dibatasi baterai.');
       });
   }, [hydrated, reminders, notificationSyncVersion, syncNativeNotifications]);
 
@@ -217,8 +254,8 @@ export default function RemindersScreen() {
       if (typeof window === 'undefined' || !('Notification' in window) || Notification.permission !== 'granted') return;
       const now = new Date();
       const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-      const today = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-      reminders.filter((item) => !item.completed && item.time === currentTime).forEach((item) => {
+      const today = localDate(now);
+      reminders.filter((item) => !item.completed && item.date === today && item.time === currentTime).forEach((item) => {
         const key = `${item.id}:${today}`;
         if (browserNotified.current.has(key)) return;
         browserNotified.current.add(key);
@@ -230,25 +267,39 @@ export default function RemindersScreen() {
     return () => clearInterval(timer);
   }, [hydrated, reminders]);
 
-  const upcoming = useMemo(() => reminders.filter((item) => !item.completed), [reminders]);
+  const upcoming = useMemo(
+    () => sortRemindersBySchedule(reminders.filter((item) => !item.completed)),
+    [reminders],
+  );
   const completed = useMemo(() => reminders.filter((item) => item.completed), [reminders]);
   const visibleReminders = activeTab === 'upcoming' ? upcoming : completed;
 
   const addReminder = async () => {
     if (!title.trim()) return;
+    if (!parseReminderDate(date)) {
+      setNotice('Masukkan tanggal dengan format YYYY-MM-DD, contohnya 2026-09-03.');
+      return;
+    }
     if (!parseReminderTime(time)) {
       setNotice('Masukkan waktu dengan format 00:00 sampai 23:59.');
       return;
     }
+    const scheduledAt = reminderDateTime(date, time);
+    if (!scheduledAt || scheduledAt.getTime() <= Date.now()) {
+      setNotice('Pilih tanggal dan jam yang belum lewat.');
+      return;
+    }
     const nextReminders = addReminderToList(
       reminders,
-      { title, time },
+      { title, date, time },
       `${Date.now()}-${Math.random()}`,
     );
     setReminders(nextReminders);
     setNotice('Pengingat tersimpan. Menyiapkan notifikasi...');
     setTitle('');
-    setTime('08:00');
+    const nextSchedule = getDefaultReminderSchedule();
+    setDate(nextSchedule.date);
+    setTime(nextSchedule.time);
     setComposerOpen(false);
     setActiveTab('upcoming');
     try {
@@ -357,7 +408,7 @@ export default function RemindersScreen() {
       {composerOpen ? (
         <Surface style={[s.composer, { backgroundColor: c.card, borderColor: c.border }]}>
           <Text style={[s.composerTitle, { color: c.foreground }]}>Pengingat baru</Text>
-          <Text style={[s.composerHint, { color: c.mutedForeground }]}>Notifikasi akan muncul setiap hari pada jam ini.</Text>
+          <Text style={[s.composerHint, { color: c.mutedForeground }]}>Notifikasi akan muncul satu kali sesuai tanggal dan jam yang dipilih.</Text>
           <TextInput
             autoFocus
             value={title}
@@ -366,6 +417,40 @@ export default function RemindersScreen() {
             placeholderTextColor={c.mutedForeground}
             style={[s.input, { borderColor: c.border, color: c.foreground, backgroundColor: c.background }]}
           />
+          <Text style={[s.fieldLabel, { color: c.mutedForeground }]}>Tanggal</Text>
+          <View style={s.dateRow}>
+            <TextInput
+              value={date}
+              onChangeText={setDate}
+              keyboardType="numbers-and-punctuation"
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={c.mutedForeground}
+              style={[s.dateInput, { borderColor: c.border, color: c.foreground, backgroundColor: c.background }]}
+            />
+            {[
+              { label: 'Hari ini', value: getRelativeDate(0) },
+              { label: 'Besok', value: getRelativeDate(1) },
+            ].map((option) => (
+              <Pressable
+                key={option.label}
+                accessibilityRole="button"
+                accessibilityLabel={`Pilih ${option.label.toLowerCase()}`}
+                onPress={() => setDate(option.value)}
+                style={({ pressed }) => [
+                  s.dateShortcut,
+                  {
+                    backgroundColor: date === option.value ? c.primary : c.secondary,
+                    opacity: pressed ? 0.7 : 1,
+                  },
+                ]}
+              >
+                <Text style={[s.dateShortcutText, { color: date === option.value ? c.primaryForeground : c.secondaryForeground }]}>
+                  {option.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={[s.fieldLabel, { color: c.mutedForeground }]}>Jam</Text>
           <View style={s.composerRow}>
             <TextInput
               value={time}
@@ -406,7 +491,7 @@ export default function RemindersScreen() {
               </Pressable>
               <View style={s.reminderCopy}>
                 <Text style={[s.reminderTitle, { color: item.completed ? c.mutedForeground : c.foreground, textDecorationLine: item.completed ? 'line-through' : 'none' }]}>{item.title}</Text>
-                <Text style={[s.reminderTime, { color: c.mutedForeground }]}>{item.time}</Text>
+                <Text style={[s.reminderTime, { color: c.mutedForeground }]}>{formatReminderDate(item.date)} · {item.time}</Text>
               </View>
               <Pressable testID={`delete-reminder-${item.id}`} accessibilityLabel={`Hapus ${item.title}`} hitSlop={10} onPress={() => deleteReminder(item.id)}>
                 <Ionicons name="trash-outline" size={18} color={c.destructive} />
@@ -463,6 +548,11 @@ const s = StyleSheet.create({
   composerTitle: { fontSize: 15, fontWeight: '800', marginBottom: 9 },
   composerHint: { fontSize: 11, lineHeight: 16, marginTop: -4, marginBottom: 9 },
   input: { height: 46, borderWidth: 1, borderRadius: 13, paddingHorizontal: 12, fontSize: 13, marginBottom: 8 },
+  fieldLabel: { fontSize: 10, fontWeight: '800', marginBottom: 6, marginTop: 2 },
+  dateRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 9 },
+  dateInput: { flex: 1, height: 44, borderWidth: 1, borderRadius: 12, paddingHorizontal: 10, fontSize: 12 },
+  dateShortcut: { minHeight: 38, borderRadius: 11, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center' },
+  dateShortcutText: { fontSize: 10, fontWeight: '800' },
   composerRow: { flexDirection: 'row', gap: 8 },
   timeInput: { width: 82, height: 46, borderWidth: 1, borderRadius: 13, paddingHorizontal: 10, fontSize: 13, textAlign: 'center' },
   composerButton: { flex: 1 },
