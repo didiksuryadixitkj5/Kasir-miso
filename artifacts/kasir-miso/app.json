@@ -40,9 +40,9 @@
     },
     "extra": {
       "googleClientIds": {
-        "web": "",
-        "android": "",
-        "ios": ""
+        "web": "553508307121-cj1jc7n5005r5e6bqh0gp9omeoucrdev.apps.googleusercontent.com",
+        "android": "553508307121-uk04mtntjliikejh3dinbprgin3mk0a8.apps.googleusercontent.com",
+        "ios": "553508307121-f0h23n5rj0jpmh5168cqt50umcj8dqid.apps.googleusercontent.com"
       },
       "eas": {
         "projectId": "8da71403-9b2d-430d-9a66-4a1d1f678106"
