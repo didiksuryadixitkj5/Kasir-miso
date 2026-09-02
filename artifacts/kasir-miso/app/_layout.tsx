@@ -17,9 +17,13 @@ import { WarungProvider } from '@/context/WarungContext';
 import { ThemeProvider } from '@/context/ThemeContext';
 import { GoogleAccountProvider } from '@/context/GoogleAccountContext';
 import { OnlineBackupProvider } from '@/context/OnlineBackupContext';
+import { setBaseUrl } from '@workspace/api-client-react';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
+
+const apiDomain = process.env.EXPO_PUBLIC_DOMAIN;
+setBaseUrl(apiDomain ? `https://${apiDomain}` : null);
 
 const queryClient = new QueryClient();
 

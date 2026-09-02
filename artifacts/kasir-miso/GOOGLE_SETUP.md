@@ -13,10 +13,15 @@ identitas akun sekaligus menyimpan backup online ke Google Drive akun yang sama.
    - Web application
    - Android application
    - iOS application
-6. Tiga environment variable berikut di project:
+6. Tiga environment variable publik berikut di project:
    - `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`
    - `EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID`
    - `EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID`
+7. Secret `GOOGLE_OAUTH_CLIENT_SECRET` untuk Web OAuth disimpan sebagai Replit
+   Secret. Jangan pernah memakai nama `EXPO_PUBLIC_` untuk client secret.
+8. Environment variable server `GOOGLE_OAUTH_CLIENT_IDS` berisi daftar Client ID
+   yang diizinkan, dipisahkan koma. Jika hanya Web Client ID yang dipakai, server
+   juga dapat membaca `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`.
 
 Salin nama variable dari `.env.example`. Client ID bukan password, tetapi
 Client Secret tidak boleh dimasukkan ke aplikasi mobile atau ke chat.
@@ -36,12 +41,20 @@ Client Secret tidak boleh dimasukkan ke aplikasi mobile atau ke chat.
   Jika alamat preview berubah, gunakan alamat terbaru yang muncul pada pesan error
   Google dan perbarui dua daftar tersebut.
 
-Setelah Client ID disimpan sebagai environment variable, muat ulang workflow
-Expo. Tombol **Hubungkan akun Google** akan membuka consent screen Google. Setelah
-berhasil, email akun tampil di kartu akun dan akses Google Drive aktif untuk sesi
-aplikasi tersebut. Kasir Miso hanya dapat mencari, membuat, memperbarui, dan
-membaca file Drive yang dibuat oleh aplikasi sendiri. File backup bernama
-`Kasir Miso Backup.json`.
+Setelah konfigurasi disimpan, muat ulang workflow API Server dan Expo. Tombol
+**Hubungkan akun Google** akan membuka consent screen Google. Setelah berhasil,
+API Server menukar authorization code dan menyimpan refresh token dalam bentuk
+terenkripsi. Aplikasi hanya menyimpan session token acak untuk mengenali koneksi
+server; access token dan refresh token Google tidak disimpan di AsyncStorage atau
+kode client.
+
+Saat aplikasi dibuka kembali, session token tersebut dipakai untuk melanjutkan
+backup tanpa meminta pemilik warung login ulang. Jika Google mencabut izin atau
+refresh token kedaluwarsa, aplikasi menampilkan instruksi untuk menghubungkan
+ulang tanpa menghapus data usaha lokal.
+
+Kasir Miso hanya dapat mencari, membuat, memperbarui, dan membaca file Drive yang
+dibuat oleh aplikasi sendiri. File backup bernama `Kasir Miso Backup.json`.
 
 ## Saat membuat APK
 

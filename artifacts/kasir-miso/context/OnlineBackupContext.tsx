@@ -1,12 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useGoogleAccount } from '@/context/GoogleAccountContext';
+import { GOOGLE_SESSION_TOKEN_KEY, useGoogleAccount } from '@/context/GoogleAccountContext';
 import { useWarung } from '@/context/WarungContext';
 
 const LAST_BACKUP_KEY = 'warung-online-backup-last-v1';
 const EXCLUDED_BACKUP_KEYS = new Set([
   'warung-google-connection-v1',
   'warung-google-account-email-v1',
+  GOOGLE_SESSION_TOKEN_KEY,
   'warung-offline-backup-v1',
   LAST_BACKUP_KEY,
 ]);

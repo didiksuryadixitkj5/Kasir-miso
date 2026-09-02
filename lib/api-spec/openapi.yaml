@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: google
+    description: Google Drive backup connection operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,107 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /google/connection:
+    get:
+      operationId: getGoogleConnection
+      tags: [google]
+      summary: Get the connected Google account
+      responses:
+        "200":
+          description: Connected account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleConnection"
+        "401":
+          description: No active connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: connectGoogleAccount
+      tags: [google]
+      summary: Exchange a Google authorization code for a server-backed connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleConnectionInput"
+      responses:
+        "200":
+          description: Connected account
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleConnection"
+        "400":
+          description: Invalid Google authorization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      operationId: disconnectGoogleAccount
+      tags: [google]
+      summary: Disconnect the Google account and delete its server credentials
+      responses:
+        "204":
+          description: Disconnected
+        "401":
+          description: No active connection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /google/drive/backup:
+    get:
+      operationId: downloadGoogleDriveBackup
+      tags: [google]
+      summary: Download the latest Kasir Miso backup from Google Drive
+      responses:
+        "200":
+          description: Backup content
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleDriveBackup"
+        "401":
+          description: Google connection expired or revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No backup exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      operationId: uploadGoogleDriveBackup
+      tags: [google]
+      summary: Upload the latest Kasir Miso backup to Google Drive
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GoogleDriveBackupInput"
+      responses:
+        "200":
+          description: Backup saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GoogleDriveBackupStatus"
+        "401":
+          description: Google connection expired or revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +136,66 @@ components:
           type: string
       required:
         - status
+    GoogleConnectionInput:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+        codeVerifier:
+          type: string
+          minLength: 43
+        redirectUri:
+          type: string
+          minLength: 1
+        clientId:
+          type: string
+          minLength: 1
+      required:
+        - code
+        - codeVerifier
+        - redirectUri
+        - clientId
+    GoogleConnection:
+      type: object
+      properties:
+        sessionToken:
+          type: string
+        email:
+          type: string
+      required:
+        - sessionToken
+        - email
+    GoogleDriveBackupInput:
+      type: object
+      properties:
+        content:
+          type: string
+          minLength: 1
+      required:
+        - content
+    GoogleDriveBackup:
+      type: object
+      properties:
+        content:
+          type: string
+        modifiedTime:
+          type: ["string", "null"]
+      required:
+        - content
+        - modifiedTime
+    GoogleDriveBackupStatus:
+      type: object
+      properties:
+        savedAt:
+          type: string
+      required:
+        - savedAt
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
 

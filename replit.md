@@ -11,6 +11,7 @@ Aplikasi kasir mobile untuk warung dan usaha kuliner kecil.
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- Google Drive server env: `SESSION_SECRET`, `GOOGLE_OAUTH_CLIENT_IDS`, and `GOOGLE_OAUTH_CLIENT_SECRET` for the Web OAuth client
 
 ## Stack
 
@@ -34,7 +35,7 @@ Aplikasi kasir mobile untuk warung dan usaha kuliner kecil.
 - Data entered in the mobile app is persisted locally with AsyncStorage so the kasir remains usable offline.
 - The Expo app is kept as a frontend-first artifact; server-backed features can be added through the shared API later.
 - Expo package versions are kept aligned with the installed SDK before starting Metro.
-- Google account login uses direct Expo OAuth with `openid`, `profile`, `email`, and `drive.file`; the same login enables automatic Drive backup and manual restore. Configure Google Drive API and the public Client IDs documented in `artifacts/kasir-miso/GOOGLE_SETUP.md`.
+- Google account login starts in Expo with `openid`, `profile`, `email`, and `drive.file`, then the API server exchanges the authorization code and keeps the encrypted refresh token. The client persists only an opaque server session token. Configure Google Drive API and OAuth values documented in `artifacts/kasir-miso/GOOGLE_SETUP.md`.
 
 ## Product
 
