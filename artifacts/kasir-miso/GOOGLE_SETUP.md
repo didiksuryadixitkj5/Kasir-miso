@@ -37,4 +37,5 @@ Client Secret tidak boleh dimasukkan ke aplikasi mobile atau ke chat.
 Setelah Client ID disimpan sebagai environment variable, muat ulang workflow
 Expo. Tombol **Hubungkan akun Google** akan membuka consent screen Google. Setelah
 berhasil, email akun tampil di kartu akun. Backup Google Drive belum termasuk
-tahap ini dan sengaja ditunda.
+tahap ini dan sengaja ditunda. Token OAuth hanya digunakan sesaat untuk membaca
+identitas dasar, lalu tidak disimpan oleh aplikasi.

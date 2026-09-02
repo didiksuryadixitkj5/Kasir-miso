@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Google from 'expo-auth-session/providers/google';
-import * as SecureStore from 'expo-secure-store';
 import { Alert, BackHandler, Modal, Platform, Pressable, Share, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -11,7 +10,6 @@ import { useWarung } from '@/context/WarungContext';
 
 const OFFLINE_BACKUP_KEY = 'warung-offline-backup-v1';
 const GOOGLE_CONNECTION_KEY = 'warung-google-connection-v1';
-const GOOGLE_ACCESS_TOKEN_KEY = 'warung-google-access-token-v1';
 const GOOGLE_ACCOUNT_EMAIL_KEY = 'warung-google-account-email-v1';
 const GOOGLE_CLIENT_ID_FALLBACK = 'google-client-id-not-configured';
 const googleWebClientId = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || GOOGLE_CLIENT_ID_FALLBACK;
@@ -85,10 +83,9 @@ export default function OtherScreen() {
     Promise.all([
       AsyncStorage.getItem(GOOGLE_CONNECTION_KEY),
       AsyncStorage.getItem(GOOGLE_ACCOUNT_EMAIL_KEY),
-      SecureStore.getItemAsync(GOOGLE_ACCESS_TOKEN_KEY),
     ])
-      .then(([saved, email, accessToken]) => {
-        setIsAccountConnected(saved === 'connected' && Boolean(accessToken));
+      .then(([saved, email]) => {
+        setIsAccountConnected(saved === 'connected');
         setAccountEmail(email ?? '');
       })
       .catch(() => setNotice('Status akun Google belum dapat dimuat.'))
@@ -121,7 +118,6 @@ export default function OtherScreen() {
     let mounted = true;
     (async () => {
       try {
-        await SecureStore.setItemAsync(GOOGLE_ACCESS_TOKEN_KEY, accessToken);
         let email = '';
         try {
           const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
@@ -168,18 +164,17 @@ export default function OtherScreen() {
   };
 
   const handleGoogleDisconnect = () => {
-    Alert.alert('Putuskan akun Google?', 'Koneksi akun Google akan dihapus dari perangkat ini. Data usaha lokal tetap tersimpan.', [
+    Alert.alert('Logout akun Google?', 'Koneksi akun Google akan dihapus dari perangkat ini. Data usaha lokal tetap tersimpan.', [
       { text: 'Batal', style: 'cancel' },
       {
-        text: 'Putuskan',
+        text: 'Logout',
         style: 'destructive',
         onPress: () => {
-          void SecureStore.deleteItemAsync(GOOGLE_ACCESS_TOKEN_KEY);
           void AsyncStorage.multiRemove([GOOGLE_CONNECTION_KEY, GOOGLE_ACCOUNT_EMAIL_KEY]);
           setIsAccountConnected(false);
           setAccountEmail('');
           setAccountSheetVisible(false);
-          setNotice('Akun Google sudah diputuskan dari perangkat ini.');
+          setNotice('Akun Google sudah logout dari perangkat ini.');
         },
       },
     ]);
@@ -312,10 +307,10 @@ export default function OtherScreen() {
         </View>
         <View style={s.accountCopy}>
           <Text style={[s.accountTitle, { color: isAccountConnected ? c.primaryForeground : c.foreground }]}>
-            {isAccountConnected ? 'Akun Google terhubung' : 'Hubungkan akun Google'}
+            {!accountHydrated ? 'Memuat status akun...' : isAccountConnected ? 'Akun Google terhubung' : 'Hubungkan akun Google'}
           </Text>
           <Text style={[s.accountDetail, { color: isAccountConnected ? c.primaryForeground : c.mutedForeground }]}>
-            {isAccountConnected ? (accountEmail || 'Login berhasil dan siap digunakan') : 'Login aman dengan akun Google'}
+            {!accountHydrated ? 'Mohon tunggu sebentar' : isAccountConnected ? (accountEmail || 'Login berhasil dan siap digunakan') : 'Login aman dengan akun Google'}
           </Text>
         </View>
         <View style={[s.accountStatus, { backgroundColor: isAccountConnected ? c.primaryForeground : c.muted }]}>
@@ -453,11 +448,11 @@ export default function OtherScreen() {
               <Pressable
                 testID="google-disconnect-button"
                 accessibilityRole="button"
-                accessibilityLabel="Putuskan akun Google"
+                accessibilityLabel="Logout akun Google"
                 onPress={handleGoogleDisconnect}
                 style={({ pressed }) => [s.secondaryAction, { opacity: pressed ? 0.62 : 1 }]}
               >
-                <Text style={[s.secondaryActionText, { color: c.destructive }]}>Putuskan akun Google</Text>
+                <Text style={[s.secondaryActionText, { color: c.destructive }]}>Logout akun Google</Text>
               </Pressable>
             ) : null}
           </View>
